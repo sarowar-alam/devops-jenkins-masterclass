@@ -1,0 +1,25 @@
+# ── Terraform ──────────────────────────────────────────────────────────────────
+.terraform/
+**/.terraform/
+.terraform.lock.hcl
+**/.terraform.lock.hcl
+
+# Plan files (may contain sensitive resource data)
+*.tfplan
+
+# State files (use remote backend — never commit local state)
+*.tfstate
+*.tfstate.backup
+
+# Variable files with real values (example files are committed)
+terraform.tfvars
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files (local developer overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
