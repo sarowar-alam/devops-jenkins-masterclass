@@ -1,0 +1,29 @@
+# ============================================================
+# terraform.tfvars.example
+# Copy this file to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — never commit real values.
+#
+# When using the Jenkins pipeline (Jenkinsfile.terraform),
+# most of these values are passed as pipeline parameters.
+# This file is for running Terraform directly from your
+# local machine or for reference.
+# ============================================================
+
+# AWS region
+aws_region               = "us-east-1"
+
+# Availability zone (suffix only — 'a' means us-east-1a)
+availability_zone_suffix = "a"
+
+# Project and environment labels (appear in all resource names and tags)
+project_name = "bmi-infra"
+environment  = "dev"
+
+# VPC and subnet CIDRs
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_cidr   = "10.0.1.0/24"
+private_subnet_cidr  = "10.0.2.0/24"
+
+# EC2 instance
+instance_type    = "t3.micro"
+root_volume_size = 20

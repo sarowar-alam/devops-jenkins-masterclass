@@ -1,0 +1,394 @@
+// ============================================================
+// Jenkinsfile.terraform
+// SL#7 — Terraform Infrastructure Pipeline
+//
+// PURPOSE:
+//   Create or Destroy AWS infrastructure using Terraform:
+//     - VPC (10.0.0.0/16), 1 Availability Zone
+//     - 1 Public Subnet  (10.0.1.0/24) + Internet Gateway
+//     - 1 Private Subnet (10.0.2.0/24) + NAT Gateway
+//     - Security Group (no inbound SSH, HTTPS/HTTP outbound)
+//     - IAM Role with AmazonSSMManagedInstanceCore policy
+//     - EC2 Ubuntu 24.04 in private subnet, SSM access only
+//
+// HOW TO USE:
+//   1. Build with Parameters → set ACTION = 'create' or 'destroy'
+//   2. Pipeline runs Plan first, then waits for manual approval
+//   3. Approve or Abort in the Jenkins UI
+//   4. After 'create', the EC2 instance ID and SSM connect
+//      command are printed in the console and archived as an artifact
+//
+// REQUIRED JENKINS CREDENTIALS:
+//   aws-credentials  — Username with password
+//                      Username = AWS_ACCESS_KEY_ID
+//                      Password = AWS_SECRET_ACCESS_KEY
+//
+// REQUIRED JENKINS PLUGINS:
+//   Pipeline, Pipeline: Stage View
+//
+// REQUIRED ON JENKINS CONTROLLER:
+//   - Terraform >= 1.6 installed and on PATH
+//     Install: https://developer.hashicorp.com/terraform/install
+//   - AWS CLI v2 installed (for identity verification)
+// ============================================================
+
+pipeline {
+
+    agent { label 'built-in' }
+
+    // ── Parameters ──────────────────────────────────────────
+    parameters {
+
+        choice(
+            name:        'ACTION',
+            choices:     ['create', 'destroy'],
+            description: '''Select the Terraform action:
+  create  — Run terraform plan + apply (provisions all infrastructure)
+  destroy — Run terraform plan -destroy + destroy (tears down ALL resources)
+  
+  IMPORTANT: Both actions require manual approval before executing.'''
+        )
+
+        string(
+            name:         'AWS_REGION',
+            defaultValue: 'us-east-1',
+            description:  'AWS region to deploy/destroy resources in.'
+        )
+
+        string(
+            name:         'ENVIRONMENT',
+            defaultValue: 'dev',
+            description:  'Environment label (dev / staging / prod). Used in resource names.'
+        )
+
+        string(
+            name:         'INSTANCE_TYPE',
+            defaultValue: 't3.micro',
+            description:  'EC2 instance type for the private server.'
+        )
+
+        string(
+            name:         'STATE_BUCKET',
+            defaultValue: '',
+            description:  'S3 bucket name for Terraform remote state. REQUIRED. Create this bucket once before the first pipeline run — see docs/07-terraform-pipeline.md.'
+        )
+
+        string(
+            name:         'STATE_KEY',
+            defaultValue: 'bmi-infra/terraform.tfstate',
+            description:  'S3 key (path) for the state file within the bucket.'
+        )
+
+        string(
+            name:         'LOCK_TABLE',
+            defaultValue: 'terraform-state-lock',
+            description:  'DynamoDB table name for Terraform state locking.'
+        )
+
+        string(
+            name:         'NOTIFY_EMAIL',
+            defaultValue: '',
+            description:  '(Optional) Email address for pipeline completion notification.'
+        )
+    }
+
+    // ── Environment ──────────────────────────────────────────
+    environment {
+        TF_DIR         = 'terraform'
+        TF_PLAN_FILE   = 'terraform.tfplan'
+        TF_OUTPUT_FILE = 'terraform-outputs.txt'
+        TF_LOG         = 'WARN'   // Set to DEBUG for verbose Terraform logging
+    }
+
+    // ── Stages ───────────────────────────────────────────────
+    stages {
+
+        // ── Stage 1: Checkout ────────────────────────────────
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Repository checked out. Branch: ${env.GIT_BRANCH ?: 'unknown'}"
+                echo "Commit: ${env.GIT_COMMIT ?: 'unknown'}"
+            }
+        }
+
+        // ── Stage 2: Verify Tooling ──────────────────────────
+        stage('Verify Tooling') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh '''
+                        echo "=== Terraform Version ==="
+                        terraform version
+
+                        echo ""
+                        echo "=== AWS CLI Version ==="
+                        aws --version
+
+                        echo ""
+                        echo "=== AWS Identity (verifying credentials) ==="
+                        aws sts get-caller-identity --region "${AWS_REGION}"
+                    '''
+                }
+
+                script {
+                    if (!params.STATE_BUCKET?.trim()) {
+                        error("STATE_BUCKET parameter is required. Create an S3 bucket and set the parameter. See docs/07-terraform-pipeline.md.")
+                    }
+                    echo "STATE_BUCKET validated: ${params.STATE_BUCKET}"
+                    echo "ACTION: ${params.ACTION} | REGION: ${params.AWS_REGION} | ENV: ${params.ENVIRONMENT}"
+                }
+            }
+        }
+
+        // ── Stage 3: Terraform Init ──────────────────────────
+        stage('Terraform Init') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    dir(env.TF_DIR) {
+                        sh '''
+                            echo "=== Terraform Init (S3 backend: ${STATE_BUCKET}/${STATE_KEY}) ==="
+                            terraform init \
+                                -backend-config="bucket=${STATE_BUCKET}" \
+                                -backend-config="key=${STATE_KEY}" \
+                                -backend-config="region=${AWS_REGION}" \
+                                -backend-config="dynamodb_table=${LOCK_TABLE}" \
+                                -backend-config="encrypt=true" \
+                                -reconfigure \
+                                -input=false
+                        '''
+                    }
+                }
+            }
+        }
+
+        // ── Stage 4: Terraform Plan ──────────────────────────
+        stage('Terraform Plan') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    dir(env.TF_DIR) {
+                        script {
+                            def planArgs = [
+                                "-var=\"aws_region=${params.AWS_REGION}\"",
+                                "-var=\"environment=${params.ENVIRONMENT}\"",
+                                "-var=\"instance_type=${params.INSTANCE_TYPE}\"",
+                                "-input=false",
+                                "-out=${env.TF_PLAN_FILE}"
+                            ]
+
+                            if (params.ACTION == 'destroy') {
+                                planArgs.add('-destroy')
+                                echo "Planning DESTROY of all resources in environment: ${params.ENVIRONMENT}"
+                            } else {
+                                echo "Planning CREATE of infrastructure in environment: ${params.ENVIRONMENT}"
+                            }
+
+                            sh "terraform plan ${planArgs.join(' ')}"
+
+                            // Save human-readable plan to a text file for archiving
+                            sh "terraform show ${env.TF_PLAN_FILE} > plan-output.txt 2>&1 || true"
+                            sh "cat plan-output.txt"
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: "${env.TF_DIR}/plan-output.txt",
+                        allowEmptyArchive: true
+                    )
+                }
+            }
+        }
+
+        // ── Stage 5: Manual Approval ─────────────────────────
+        // Safety gate — a human must review the plan and approve
+        // before any resources are created or destroyed.
+        stage('Manual Approval') {
+            steps {
+                script {
+                    def actionUpper = params.ACTION.toUpperCase()
+                    def msg = params.ACTION == 'destroy'
+                        ? "⚠️  DESTROY APPROVAL REQUIRED ⚠️\n\nThis will PERMANENTLY DELETE all infrastructure in environment '${params.ENVIRONMENT}' (${params.AWS_REGION}).\n\nReview the plan-output.txt artifact above, then approve or abort."
+                        : "✅  APPLY APPROVAL REQUIRED\n\nThis will CREATE infrastructure in environment '${params.ENVIRONMENT}' (${params.AWS_REGION}).\n\nReview the plan-output.txt artifact above, then approve or abort."
+
+                    timeout(time: 30, unit: 'MINUTES') {
+                        input(
+                            id:      'TerraformApproval',
+                            message: msg,
+                            ok:      "Yes, ${actionUpper} the infrastructure"
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── Stage 6a: Terraform Apply ────────────────────────
+        stage('Terraform Apply') {
+            when {
+                expression { params.ACTION == 'create' }
+            }
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    dir(env.TF_DIR) {
+                        sh '''
+                            echo "=== Terraform Apply ==="
+                            terraform apply -input=false -auto-approve "${TF_PLAN_FILE}"
+                        '''
+                    }
+                }
+            }
+        }
+
+        // ── Stage 6b: Terraform Destroy ──────────────────────
+        stage('Terraform Destroy') {
+            when {
+                expression { params.ACTION == 'destroy' }
+            }
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    dir(env.TF_DIR) {
+                        sh '''
+                            echo "=== Terraform Destroy ==="
+                            terraform apply -input=false -auto-approve "${TF_PLAN_FILE}"
+                        '''
+                    }
+                }
+            }
+        }
+
+        // ── Stage 7: Capture Outputs ─────────────────────────
+        // Only runs after a successful apply (create).
+        // Prints the EC2 instance ID, private IP, and SSM connect command.
+        stage('Infrastructure Outputs') {
+            when {
+                expression { params.ACTION == 'create' }
+            }
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    dir(env.TF_DIR) {
+                        sh '''
+                            echo "=============================================="
+                            echo "  INFRASTRUCTURE CREATED SUCCESSFULLY"
+                            echo "=============================================="
+                            echo ""
+
+                            terraform output -no-color | tee "${TF_OUTPUT_FILE}"
+
+                            echo ""
+                            echo "=== Quick Reference ==="
+                            echo "EC2 Instance ID : $(terraform output -raw ec2_instance_id)"
+                            echo "EC2 Private IP  : $(terraform output -raw ec2_private_ip)"
+                            echo "SSM Connect     : $(terraform output -raw ssm_connect_command)"
+                            echo ""
+                            echo "To connect: $(terraform output -raw ssm_connect_command)"
+                            echo "Console URL: $(terraform output -raw ssm_connect_console_url)"
+                        '''
+                    }
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts(
+                        artifacts: "${env.TF_DIR}/${env.TF_OUTPUT_FILE}",
+                        allowEmptyArchive: true
+                    )
+                }
+            }
+        }
+    }
+
+    // ── Post Actions ─────────────────────────────────────────
+    post {
+
+        success {
+            script {
+                def actionLabel = params.ACTION == 'destroy' ? 'DESTROYED' : 'CREATED'
+                echo "Pipeline completed successfully. Infrastructure ${actionLabel}."
+
+                if (params.NOTIFY_EMAIL?.trim()) {
+                    try {
+                        def subject = "✅ Jenkins | Terraform ${params.ACTION.capitalize()} | ${params.ENVIRONMENT} | SUCCESS"
+                        def body = """
+<html><body style="font-family: Arial, sans-serif;">
+<h2 style="color: #2c7a2c;">✅ Terraform ${params.ACTION.capitalize()} — SUCCESS</h2>
+<table style="border-collapse:collapse; width:100%;">
+  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Action</b></td><td style="padding:6px; border:1px solid #ddd;">${params.ACTION.toUpperCase()}</td></tr>
+  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Environment</b></td><td style="padding:6px; border:1px solid #ddd;">${params.ENVIRONMENT}</td></tr>
+  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Region</b></td><td style="padding:6px; border:1px solid #ddd;">${params.AWS_REGION}</td></tr>
+  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Build</b></td><td style="padding:6px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
+  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Console</b></td><td style="padding:6px; border:1px solid #ddd;"><a href="${env.BUILD_URL}">View Build</a></td></tr>
+</table>
+<p>Download the <b>terraform-outputs.txt</b> artifact for EC2 instance ID and SSM connect command.</p>
+</body></html>
+"""
+                        emailext(
+                            subject:     subject,
+                            body:        body,
+                            to:          params.NOTIFY_EMAIL,
+                            mimeType:    'text/html'
+                        )
+                    } catch (emailError) {
+                        echo "[WARN] Email notification failed — check SES SMTP config: ${emailError.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        failure {
+            script {
+                echo "Pipeline FAILED. Check console output for Terraform errors."
+
+                if (params.NOTIFY_EMAIL?.trim()) {
+                    try {
+                        emailext(
+                            subject:  "❌ Jenkins | Terraform ${params.ACTION.capitalize()} | ${params.ENVIRONMENT} | FAILED",
+                            body:     "Terraform ${params.ACTION} FAILED for environment '${params.ENVIRONMENT}' in ${params.AWS_REGION}.\n\nBuild: #${env.BUILD_NUMBER}\nConsole: ${env.BUILD_URL}console",
+                            to:       params.NOTIFY_EMAIL,
+                            mimeType: 'text/plain'
+                        )
+                    } catch (emailError) {
+                        echo "[WARN] Email notification failed — check SES SMTP config: ${emailError.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        aborted {
+            echo "Pipeline was aborted at the approval step. No infrastructure changes were made."
+        }
+
+        always {
+            cleanWs(
+                cleanWhenAborted:  true,
+                cleanWhenFailure:  false,  // keep workspace on failure for debugging
+                cleanWhenSuccess:  true,
+                cleanWhenUnstable: false
+            )
+        }
+    }
+}
