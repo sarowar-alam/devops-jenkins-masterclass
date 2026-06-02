@@ -24,17 +24,18 @@ apt-get install -y \
   unzip \
   git
 
-# ── 2. Java 17 ───────────────────────────────────────────────────────────────
-apt-get install -y openjdk-17-jre
+# ── 2. Java 21 (required by Jenkins LTS 2.492+) ──────────────────────────────
+apt-get install -y openjdk-21-jre
 java -version
 
 # ── 3. Jenkins LTS repository ────────────────────────────────────────────────
-# Save the key in ASCII-armored format directly — gpg --dearmor is unreliable
-# in non-interactive cloud-init contexts and causes the NO_PUBKEY error.
-curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key \
-  -o /usr/share/keyrings/jenkins-keyring.asc
+# Jenkins rotated signing key Dec 2025 — use jenkins.io-2026.key.
+# Save ASCII-armored to /etc/apt/keyrings/ (no gpg --dearmor needed).
+install -m 0755 -d /etc/apt/keyrings
+wget -q -O /etc/apt/keyrings/jenkins-keyring.asc \
+  https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
 
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
+echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
   > /etc/apt/sources.list.d/jenkins.list
 
 apt-get update -y

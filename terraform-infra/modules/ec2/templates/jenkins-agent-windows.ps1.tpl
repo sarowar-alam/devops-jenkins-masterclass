@@ -25,8 +25,9 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 
 Write-Host "--- Chocolatey installed ---"
 
-# ── 2. Install Java 17, Git, NSSM ────────────────────────────────────────────
-choco install -y --no-progress temurin17
+# ── 2. Install Java 21, Git, NSSM ────────────────────────────────────────────────
+# Jenkins LTS 2.492+ requires Java 21.
+choco install -y --no-progress temurin21
 choco install -y --no-progress git
 choco install -y --no-progress nssm
 
@@ -35,6 +36,25 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
             [System.Environment]::GetEnvironmentVariable("Path","User")
 
 Write-Host "--- Packages installed ---"
+
+# ── 2b. Set JAVA_HOME at system level (needed for Jenkins agent JAR) ──────────
+$jdkDir = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Directory `
+  -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*21*' } `
+  | Sort-Object Name -Descending | Select-Object -First 1
+if ($jdkDir) {
+  $javaHome = $jdkDir.FullName
+  [System.Environment]::SetEnvironmentVariable("JAVA_HOME", $javaHome, "Machine")
+  $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+  if ($machinePath -notlike "*$javaHome\bin*") {
+    [System.Environment]::SetEnvironmentVariable("Path", "$javaHome\bin;$machinePath", "Machine")
+  }
+  $env:JAVA_HOME = $javaHome
+  $env:Path = "$javaHome\bin;$env:Path"
+  Write-Host "--- JAVA_HOME set to: $javaHome ---"
+} else {
+  Write-Host "WARNING: Could not locate temurin21 JDK directory"
+  Get-ChildItem "C:\Program Files\Eclipse Adoptium" -ErrorAction SilentlyContinue | Select-Object Name
+}
 
 # ── 3. Jenkins agent workspace directory ─────────────────────────────────────
 New-Item -Path "C:\jenkins-agent" -ItemType Directory -Force | Out-Null

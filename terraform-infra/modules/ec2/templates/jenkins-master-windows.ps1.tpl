@@ -25,8 +25,10 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 
 Write-Host "--- Chocolatey installed ---"
 
-# ── 2. Install Java 17, Jenkins, Git, AWS CLI ────────────────────────────────
-choco install -y --no-progress temurin17
+# ── 2. Install Java 21, Jenkins, Git, AWS CLI ────────────────────────────────
+# Jenkins LTS 2.492+ requires Java 21. temurin21 installs to
+# C:\Program Files\Eclipse Adoptium\jdk-21.*
+choco install -y --no-progress temurin21
 choco install -y --no-progress jenkins
 choco install -y --no-progress git
 choco install -y --no-progress awscli
@@ -38,9 +40,11 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 Write-Host "--- Packages installed ---"
 
 # ── 2b. Set JAVA_HOME at system level so Jenkins service can find Java ────────
-# Chocolatey installs temurin17 to C:\Program Files\Eclipse Adoptium\jdk-17.*
-$jdkDir = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Filter "jdk-17*" -Directory `
-  -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+# choco auto-starts Jenkins immediately after install — before JAVA_HOME is set.
+# We stop the service, set JAVA_HOME at Machine scope, then restart cleanly.
+$jdkDir = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Directory `
+  -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*21*' } `
+  | Sort-Object Name -Descending | Select-Object -First 1
 if ($jdkDir) {
   $javaHome = $jdkDir.FullName
   [System.Environment]::SetEnvironmentVariable("JAVA_HOME", $javaHome, "Machine")
@@ -52,7 +56,8 @@ if ($jdkDir) {
   $env:Path = "$javaHome\bin;$env:Path"
   Write-Host "--- JAVA_HOME set to: $javaHome ---"
 } else {
-  Write-Host "WARNING: Could not locate temurin17 JDK directory — Jenkins may fail to start"
+  Write-Host "WARNING: Could not locate temurin21 JDK directory — Jenkins may fail to start"
+  Get-ChildItem "C:\Program Files\Eclipse Adoptium" -ErrorAction SilentlyContinue | Select-Object Name
 }
 
 # ── 3. Firewall rules ────────────────────────────────────────────────────────

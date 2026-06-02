@@ -24,8 +24,8 @@ apt-get install -y \
   unzip \
   git
 
-# ── 2. Java 17 (required for Jenkins agent JAR) ───────────────────────────────
-apt-get install -y openjdk-17-jre
+# ── 2. Java 21 (required for Jenkins agent JAR with LTS 2.492+) ────────────────────
+apt-get install -y openjdk-21-jre
 java -version
 
 # ── 3. Docker CE ──────────────────────────────────────────────────────────────
