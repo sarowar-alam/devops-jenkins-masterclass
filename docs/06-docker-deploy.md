@@ -22,15 +22,15 @@
 └─────────────────────┬───────────────────────────────┘
                       │ build-manifest.json (artifact)
                       │ RC_BUILD_NUMBER (parameter)
-┌─────────────────────▼───────────────────────────────┐
-│  PIPELINE 2: bmi-deploy-docker  (Jenkinsfile.deploy-docker) │
-│                                                     │
-│  Fetch Manifest → Prepare EC2 (Docker + AWS CLI)   │
-│  → SCP docker-compose.prod.yml to EC2              │
-│  → Write .env → ECR login on EC2                   │
-│  → Rolling update OR fresh deploy                  │
-│  → Health check → Email notification               │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────▼──────────────────────────────────────┐
+│  PIPELINE 2: bmi-deploy-docker (Jenkinsfile.deploy-docker) │
+│                                                            │
+│  Fetch Manifest → Prepare EC2 (Docker + AWS CLI)           │
+│  → SCP docker-compose.prod.yml to EC2                      │
+│  → Write .env → ECR login on EC2                           │
+│  → Rolling update OR fresh deploy                          │
+│  → Health check → Email notification                       │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ---
