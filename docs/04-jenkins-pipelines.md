@@ -349,3 +349,14 @@ With three working pipeline jobs verified, you are ready for:
 
 - **SL#5 — `bmi-pipeline-deploy`:** Full bare-metal deployment pipeline to AWS EC2
 - **SL#6 — `bmi-rc-pipeline` + `bmi-deploy-docker`:** Docker + ECR build and deploy pipelines
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

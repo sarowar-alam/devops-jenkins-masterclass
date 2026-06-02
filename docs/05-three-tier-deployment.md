@@ -497,3 +497,14 @@ sudo cat /etc/nginx/sites-available/bmi-health-tracker
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

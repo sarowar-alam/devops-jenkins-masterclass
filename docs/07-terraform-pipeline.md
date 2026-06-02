@@ -450,3 +450,14 @@ Resources created by this pipeline and approximate AWS cost:
 | EBS gp3 20GB | ~$0.08/GB-month |
 
 **Always run the DESTROY pipeline when the EC2 is not needed** — the NAT Gateway is the most expensive component and incurs costs even when idle.
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

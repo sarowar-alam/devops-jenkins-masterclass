@@ -530,3 +530,14 @@ Restart-Service -Name Jenkins
 3. Verify firewall allows port 8080
 4. On AWS: verify Security Group inbound rule for port 8080
 5. Try accessing from the server itself first: `curl http://localhost:8080`
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

@@ -517,3 +517,14 @@ Verify:
 2. The `RC_BUILD_NUMBER` you entered exists in that pipeline
 3. The Copy Artifact plugin is installed: `Manage Jenkins` → `Plugins` → `Installed`
 4. The RC pipeline archived `build-manifest.json` (check its build artifacts)
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---

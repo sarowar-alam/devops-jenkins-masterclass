@@ -371,3 +371,14 @@ echo "Running on ${NODE_NAME} — Build ${BUILD_NUMBER} — Branch ${GIT_BRANCH}
 | Self-hosted runner | Jenkins Agent |
 
 Jenkins is not harder than GitHub Actions — it is the same concepts with more power and more responsibility for the infrastructure.
+
+---
+
+## Project Lead
+
+**MD Sarowar Alam**
+Lead DevOps Engineer, WPP Production
+📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
+🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
+
+---
