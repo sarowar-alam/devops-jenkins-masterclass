@@ -29,11 +29,12 @@ apt-get install -y openjdk-17-jre
 java -version
 
 # ── 3. Jenkins LTS repository ────────────────────────────────────────────────
-curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | \
-  gpg --dearmor -o /usr/share/keyrings/jenkins-keyring.gpg
+# Save the key in ASCII-armored format directly — gpg --dearmor is unreliable
+# in non-interactive cloud-init contexts and causes the NO_PUBKEY error.
+curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key \
+  -o /usr/share/keyrings/jenkins-keyring.asc
 
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.gpg] \
-  https://pkg.jenkins.io/debian-stable binary/" \
+echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
   > /etc/apt/sources.list.d/jenkins.list
 
 apt-get update -y
@@ -58,7 +59,7 @@ ufw --force enable
 
 # ── 7. Wait for initialAdminPassword ─────────────────────────────────────────
 echo "--- Waiting for Jenkins initialAdminPassword ---"
-maxWait=180
+maxWait=300
 elapsed=0
 passFile=/var/lib/jenkins/secrets/initialAdminPassword
 

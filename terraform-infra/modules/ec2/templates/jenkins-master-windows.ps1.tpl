@@ -37,6 +37,24 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 
 Write-Host "--- Packages installed ---"
 
+# ── 2b. Set JAVA_HOME at system level so Jenkins service can find Java ────────
+# Chocolatey installs temurin17 to C:\Program Files\Eclipse Adoptium\jdk-17.*
+$jdkDir = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Filter "jdk-17*" -Directory `
+  -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+if ($jdkDir) {
+  $javaHome = $jdkDir.FullName
+  [System.Environment]::SetEnvironmentVariable("JAVA_HOME", $javaHome, "Machine")
+  $machinePath = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
+  if ($machinePath -notlike "*$javaHome\bin*") {
+    [System.Environment]::SetEnvironmentVariable("Path", "$javaHome\bin;$machinePath", "Machine")
+  }
+  $env:JAVA_HOME = $javaHome
+  $env:Path = "$javaHome\bin;$env:Path"
+  Write-Host "--- JAVA_HOME set to: $javaHome ---"
+} else {
+  Write-Host "WARNING: Could not locate temurin17 JDK directory — Jenkins may fail to start"
+}
+
 # ── 3. Firewall rules ────────────────────────────────────────────────────────
 New-NetFirewallRule `
   -DisplayName "Jenkins HTTP 8080" `
@@ -57,20 +75,36 @@ New-NetFirewallRule `
 Write-Host "--- Firewall rules created ---"
 
 # ── 4. Ensure Jenkins service is running ─────────────────────────────────────
+# Stop first in case choco auto-started it before JAVA_HOME was set
+Stop-Service -Name Jenkins -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 3
 Set-Service -Name Jenkins -StartupType Automatic -ErrorAction SilentlyContinue
 Start-Service -Name Jenkins -ErrorAction SilentlyContinue
 Write-Host "--- Jenkins service started ---"
 
 # ── 5. Wait for initialAdminPassword ─────────────────────────────────────────
+# Jenkins home path varies by install method — check all known locations.
 Write-Host "--- Waiting for Jenkins initialAdminPassword ---"
-$maxWait  = 300
-$elapsed  = 0
-$passFile = "C:\ProgramData\Jenkins\.jenkins\secrets\initialAdminPassword"
+$maxWait = 600
+$elapsed = 0
+$passFile = $null
+$candidatePaths = @(
+  "C:\ProgramData\Jenkins\.jenkins\secrets\initialAdminPassword",
+  "C:\Windows\System32\config\systemprofile\AppData\Local\Jenkins\.jenkins\secrets\initialAdminPassword",
+  "C:\Windows\ServiceProfiles\LocalSystem\AppData\Local\Jenkins\.jenkins\secrets\initialAdminPassword"
+)
 
-while (-not (Test-Path $passFile)) {
+while ($true) {
+  foreach ($p in $candidatePaths) {
+    if (Test-Path $p) { $passFile = $p; break }
+  }
+  if ($passFile) { break }
   if ($elapsed -ge $maxWait) {
     Write-Host "ERROR: Jenkins did not write initialAdminPassword within $maxWait seconds"
-    Write-Host "Check: Get-Service Jenkins | Select-Object Status"
+    Write-Host "Service status:"
+    Get-Service Jenkins | Select-Object Name, Status, StartType | Format-List
+    Write-Host "Checked paths:"
+    $candidatePaths | ForEach-Object { Write-Host "  $_" }
     break
   }
   Start-Sleep -Seconds 10
