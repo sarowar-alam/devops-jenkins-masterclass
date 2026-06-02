@@ -1,7 +1,7 @@
 # master-sg: Jenkins UI open to all, SSH/RDP locked to admin_cidr
 resource "aws_security_group" "master" {
   name        = "${var.name_prefix}-master-sg"
-  description = "Jenkins master — 8080 public, 50000 from VPC, SSH/RDP from admin"
+  description = "Jenkins master - 8080 public, 50000 from VPC, SSH/RDP from admin"
   vpc_id      = var.vpc_id
 
   ingress {
@@ -52,7 +52,7 @@ resource "aws_security_group" "master" {
 # agent-sg: SSH from VPC (master→agent), RDP from admin only
 resource "aws_security_group" "agent" {
   name        = "${var.name_prefix}-agent-sg"
-  description = "Jenkins agent — SSH from VPC, RDP from admin, no public inbound"
+  description = "Jenkins agent - SSH from VPC, RDP from admin, no public inbound"
   vpc_id      = var.vpc_id
 
   ingress {
