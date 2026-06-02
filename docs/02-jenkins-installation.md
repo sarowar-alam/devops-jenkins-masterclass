@@ -17,7 +17,7 @@
 | RAM | 2 GB | 4 GB |
 | Disk | 20 GB | 50 GB |
 | OS | Ubuntu 24.04 LTS | Ubuntu 24.04 LTS |
-| Java | Java 17 (JRE) | Java 17 (JDK) |
+| Java | Java 21 (JRE) | Java 21 (JDK) |
 | Port | 8080 open inbound | 8080 + 50000 (agent JNLP) |
 
 > **Note:** Jenkins requires Java. It does **not** bundle Java. You must install it first.
@@ -32,17 +32,17 @@ sudo apt update && sudo apt upgrade -y
 
 ---
 
-### Step 2 — Install Java 17
+### Step 2 — Install Java 21
 
-Jenkins 2.361+ requires Java 11 or 17. We use Java 17:
+Jenkins LTS 2.492+ requires Java 21. We use Java 21:
 
 ```bash
-sudo apt install -y fontconfig openjdk-17-jre
+sudo apt install -y fontconfig openjdk-21-jre
 
 # Verify installation
 java -version
 # Expected output:
-# openjdk version "17.0.x" ...
+# openjdk version "21.0.x" ...
 ```
 
 ---
@@ -52,12 +52,13 @@ java -version
 Jenkins provides an official apt repository. Add the GPG key and source list:
 
 ```bash
-# Download and add the Jenkins GPG key
-sudo wget -O /usr/share/keyrings/jenkins-keyring.asc \
-  https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+# Download and add the Jenkins GPG key (rotated Dec 2025 — use 2026 key)
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo wget -O /etc/apt/keyrings/jenkins-keyring.asc \
+  https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
 
 # Add the Jenkins apt repository
-echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] \
   https://pkg.jenkins.io/debian-stable binary/" | \
   sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
 
@@ -239,32 +240,37 @@ sudo systemctl restart jenkins
 | RAM | 4 GB | 8 GB |
 | Disk | 40 GB | 80 GB |
 | OS | Windows Server 2019 | Windows Server 2019 (or 2022) |
-| Java | JDK 17 | JDK 17 |
+| Java | JDK 21 | JDK 21 |
 | Port | 8080 open inbound | 8080 + 50000 |
 | Account | Local Administrator | Domain or local Admin |
 
 ---
 
-### Step 1 — Install Java 17 (JDK)
+### Step 1 — Install Java 21 (JDK)
 
-Jenkins on Windows requires a full JDK (not just JRE).
+Jenkins LTS 2.492+ requires Java 21. A full JDK is recommended on Windows.
 
 1. Go to: [https://adoptium.net/temurin/releases/](https://adoptium.net/temurin/releases/)
-2. Select: **Version 17**, **Windows**, **x64**, **JDK**, `.msi` package
+2. Select: **Version 21**, **Windows**, **x64**, **JDK**, `.msi` package
 3. Download and run the `.msi` installer
 4. During installation, ensure these options are checked:
    - ✅ **Add to PATH**
    - ✅ **Set JAVA_HOME variable**
 5. Complete the installation
 
+> **Or via Chocolatey (recommended for automation):**
+> ```powershell
+> choco install -y temurin21
+> ```
+
 **Verify in PowerShell (run as Administrator):**
 
 ```powershell
 java -version
-# Expected: openjdk version "17.0.x" ...
+# Expected: openjdk version "21.0.x" ...
 
 $env:JAVA_HOME
-# Expected: C:\Program Files\Eclipse Adoptium\jdk-17.x.x.x-hotspot
+# Expected: C:\Program Files\Eclipse Adoptium\jdk-21.x.x.x-hotspot
 ```
 
 ---
@@ -299,7 +305,7 @@ $env:JAVA_HOME
 
 6. **Select Java Home:**
    - The installer should auto-detect `JAVA_HOME`
-   - If not, browse to your JDK installation folder (e.g. `C:\Program Files\Eclipse Adoptium\jdk-17.x.x.x-hotspot`)
+   - If not, browse to your JDK installation folder (e.g. `C:\Program Files\Eclipse Adoptium\jdk-21.x.x.x-hotspot`)
    - Click **Next**
 
 7. **Custom Setup:** Leave defaults → **Next**

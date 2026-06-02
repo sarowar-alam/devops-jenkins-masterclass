@@ -42,17 +42,17 @@ The Jenkins master SSHes into the agent machine, copies the `agent.jar` file, an
 
 Run all commands on the **Ubuntu 24.04 agent machine** (not the master).
 
-#### Step A1 — Install Java 17
+#### Step A1 — Install Java 21
 
 The agent requires the same Java version as the master:
 
 ```bash
 sudo apt update
-sudo apt install -y fontconfig openjdk-17-jre
+sudo apt install -y fontconfig openjdk-21-jre
 
 # Verify
 java -version
-# Expected: openjdk version "17.0.x"
+# Expected: openjdk version "21.0.x"
 ```
 
 #### Step A2 — Create the `jenkins` OS User
@@ -192,18 +192,18 @@ Unlike SSH launch, the agent machine **initiates the connection to the master** 
 
 Run all steps on the **Windows agent machine** (not the master).
 
-#### Step A1 — Install Java 17 JDK
+#### Step A1 — Install Java 21 JDK
 
-1. Download JDK 17 from: [https://adoptium.net/temurin/releases/](https://adoptium.net/temurin/releases/)
-2. Select: Version 17, Windows, x64, JDK, `.msi`
+1. Download JDK 21 from: [https://adoptium.net/temurin/releases/](https://adoptium.net/temurin/releases/)
+2. Select: Version 21, Windows, x64, JDK, `.msi`
 3. Run the installer — ensure `JAVA_HOME` and `PATH` options are checked
 4. Verify:
 
 ```powershell
 java -version
-# Expected: openjdk version "17.0.x"
+# Expected: openjdk version "21.0.x"
 $env:JAVA_HOME
-# Expected: C:\Program Files\Eclipse Adoptium\jdk-17.x.x.x-hotspot
+# Expected: C:\Program Files\Eclipse Adoptium\jdk-21.x.x.x-hotspot
 ```
 
 #### Step A2 — Create Agent Working Directories
@@ -318,7 +318,7 @@ Run all commands as **Administrator** in PowerShell:
 
 ```powershell
 # Install service named "JenkinsAgent"
-nssm install JenkinsAgent "C:\Program Files\Eclipse Adoptium\jdk-17.x.x.x-hotspot\bin\java.exe"
+nssm install JenkinsAgent "C:\Program Files\Eclipse Adoptium\jdk-21.x.x.x-hotspot\bin\java.exe"
 ```
 
 > Replace the Java path with your actual `$env:JAVA_HOME\bin\java.exe`
