@@ -1,0 +1,419 @@
+// ============================================================
+// BMI Health Tracker — Docker Deploy Pipeline (SL#6)
+// Pulls RC images from ECR, deploys to AWS Ubuntu 24.04 EC2
+// using Docker Compose.
+//
+// Smart idempotent logic:
+//   Running containers → rolling update (zero-downtime)
+//   No containers      → fresh deployment
+//
+// Job name: bmi-deploy-docker
+//
+// Required Jenkins Credentials:
+//   aws-credentials  → Username with password
+//                      Username = AWS_ACCESS_KEY_ID
+//                      Password = AWS_SECRET_ACCESS_KEY
+//   bmi-db-password  → Secret text (strong PostgreSQL password)
+//   ec2-ssh-key      → SSH Username with private key (EC2 .pem)
+//
+// Required Jenkins Plugins:
+//   Copy Artifact, SSH Agent, Credentials Binding, Email Extension
+//
+// Prerequisite:
+//   Run bmi-rc-pipeline FIRST to build and push images to ECR.
+//   Note the build number — you will enter it as RC_BUILD_NUMBER.
+// ============================================================
+
+pipeline {
+    agent { label 'built-in' }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    parameters {
+        string(
+            name: 'RC_BUILD_NUMBER',
+            defaultValue: '',
+            description: 'RC pipeline build number to deploy (e.g. 42) — required'
+        )
+        string(
+            name: 'EC2_HOST',
+            defaultValue: '',
+            description: 'EC2 Public IP or hostname — required'
+        )
+        string(
+            name: 'EC2_USER',
+            defaultValue: 'ubuntu',
+            description: 'SSH username on the EC2 instance'
+        )
+        string(
+            name: 'SSH_CREDENTIALS_ID',
+            defaultValue: 'ec2-ssh-key',
+            description: 'Jenkins Credential ID for EC2 SSH private key'
+        )
+        string(
+            name: 'NOTIFY_EMAIL',
+            defaultValue: '',
+            description: 'Email address for deployment notifications — required'
+        )
+        string(
+            name: 'AWS_REGION',
+            defaultValue: 'us-east-1',
+            description: 'AWS region where ECR repositories reside'
+        )
+    }
+
+    stages {
+
+        // --------------------------------------------------------
+        // Stage 1: Validate Parameters
+        // --------------------------------------------------------
+        stage('Validate Parameters') {
+            steps {
+                script {
+                    if (!params.RC_BUILD_NUMBER?.trim()) {
+                        error("RC_BUILD_NUMBER is required. Run bmi-rc-pipeline first and use its build number.")
+                    }
+                    if (!params.EC2_HOST?.trim()) {
+                        error("EC2_HOST is required. Provide the EC2 public IP or hostname.")
+                    }
+                    if (!params.NOTIFY_EMAIL?.trim()) {
+                        error("NOTIFY_EMAIL is required for deployment notifications.")
+                    }
+                    echo "Deploying RC Build #${params.RC_BUILD_NUMBER} to ${params.EC2_USER}@${params.EC2_HOST}"
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 2: Fetch Build Manifest from RC Pipeline
+        // Uses Copy Artifact plugin to fetch build-manifest.json
+        // from the specific RC build number provided as parameter
+        // --------------------------------------------------------
+        stage('Fetch Build Manifest') {
+            steps {
+                script {
+                    // Copy build-manifest.json from the RC pipeline's archived artifacts
+                    copyArtifacts(
+                        projectName: 'bmi-rc-pipeline',
+                        selector: specific(params.RC_BUILD_NUMBER),
+                        filter: 'build-manifest.json',
+                        fingerprintArtifacts: true
+                    )
+
+                    // Parse the manifest to extract image URIs
+                    def manifest = readJSON file: 'build-manifest.json'
+
+                    env.IMAGE_TAG        = manifest.imageTag
+                    env.FRONTEND_IMAGE   = manifest.images.frontend
+                    env.BACKEND_IMAGE    = manifest.images.backend
+                    env.ECR_REGISTRY     = manifest.ecrRegistry
+                    env.GIT_COMMIT_SHA   = manifest.gitCommit
+                    env.RC_TIMESTAMP     = manifest.timestamp
+
+                    echo "============================================"
+                    echo " Manifest loaded"
+                    echo " RC Build #    : ${params.RC_BUILD_NUMBER}"
+                    echo " Image Tag     : ${env.IMAGE_TAG}"
+                    echo " Frontend      : ${env.FRONTEND_IMAGE}"
+                    echo " Backend       : ${env.BACKEND_IMAGE}"
+                    echo " Git Commit    : ${env.GIT_COMMIT_SHA}"
+                    echo " Built at      : ${env.RC_TIMESTAMP}"
+                    echo "============================================"
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 3: Checkout (for docker-compose.prod.yml)
+        // We need the docker-compose file from the repo to SCP to EC2
+        // --------------------------------------------------------
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Repository checked out — docker-compose.prod.yml available for transfer"
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 4: Prepare EC2
+        // Installs Docker and AWS CLI if not present (idempotent)
+        // --------------------------------------------------------
+        stage('Prepare EC2') {
+            steps {
+                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no \
+                            -o ConnectTimeout=30 \
+                            ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
+                            set -euo pipefail
+
+                            # --- Install Docker if not present ---
+                            if command -v docker &>/dev/null; then
+                                echo "[EXISTS] Docker already installed: \$(docker --version)"
+                            else
+                                echo "[INSTALL] Installing Docker CE..."
+                                sudo apt-get update -qq
+                                sudo apt-get install -y ca-certificates curl gnupg
+                                sudo install -m 0755 -d /etc/apt/keyrings
+                                curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+                                    sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                                sudo chmod a+r /etc/apt/keyrings/docker.gpg
+                                echo "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+                                    https://download.docker.com/linux/ubuntu \
+                                    \$(. /etc/os-release && echo \$VERSION_CODENAME) stable" | \
+                                    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                                sudo apt-get update -qq
+                                sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+                                sudo usermod -aG docker ubuntu
+                                sudo systemctl enable --now docker
+                                echo "[OK] Docker installed: \$(docker --version)"
+                            fi
+
+                            # --- Install AWS CLI v2 if not present ---
+                            if command -v aws &>/dev/null; then
+                                echo "[EXISTS] AWS CLI already installed: \$(aws --version)"
+                            else
+                                echo "[INSTALL] Installing AWS CLI v2..."
+                                sudo apt-get install -y unzip
+                                curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+                                    -o /tmp/awscliv2.zip
+                                unzip -q /tmp/awscliv2.zip -d /tmp
+                                sudo /tmp/aws/install
+                                rm -rf /tmp/aws /tmp/awscliv2.zip
+                                echo "[OK] AWS CLI installed: \$(aws --version)"
+                            fi
+
+                            # --- Create app directory ---
+                            mkdir -p /home/ubuntu/bmi-docker
+                            echo "[OK] EC2 preparation complete"
+REMOTE_SCRIPT
+                    """
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 5: Deploy to EC2
+        // Transfers compose file, writes .env, pulls images, deploys
+        // Rolling update if containers are running; fresh if not
+        // --------------------------------------------------------
+        stage('Deploy to EC2') {
+            steps {
+                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'aws-credentials',
+                            usernameVariable: 'AWS_KEY_ID',
+                            passwordVariable: 'AWS_KEY_SECRET'
+                        ),
+                        string(
+                            credentialsId: 'bmi-db-password',
+                            variable: 'DB_PASSWORD'
+                        )
+                    ]) {
+                        // Transfer docker-compose.prod.yml to EC2
+                        sh """
+                            scp -o StrictHostKeyChecking=no \
+                                docker-compose.prod.yml \
+                                ${params.EC2_USER}@${params.EC2_HOST}:/home/ubuntu/bmi-docker/docker-compose.prod.yml
+                            echo "docker-compose.prod.yml transferred to EC2"
+                        """
+
+                        // Also transfer DB init SQL scripts for first run
+                        sh """
+                            ssh -o StrictHostKeyChecking=no \
+                                ${params.EC2_USER}@${params.EC2_HOST} \
+                                'mkdir -p /home/ubuntu/bmi-docker/migrations'
+
+                            scp -o StrictHostKeyChecking=no \
+                                backend/migrations/001_create_measurements.sql \
+                                ${params.EC2_USER}@${params.EC2_HOST}:/home/ubuntu/bmi-docker/migrations/01-create_measurements.sql
+
+                            scp -o StrictHostKeyChecking=no \
+                                backend/migrations/002_add_measurement_date.sql \
+                                ${params.EC2_USER}@${params.EC2_HOST}:/home/ubuntu/bmi-docker/migrations/02-add_measurement_date.sql
+
+                            echo "Migration SQL files transferred"
+                        """
+
+                        sh """
+                            ssh -o StrictHostKeyChecking=no \
+                                ${params.EC2_USER}@${params.EC2_HOST} bash -s << REMOTE_SCRIPT
+                            set -euo pipefail
+                            APP_DIR=/home/ubuntu/bmi-docker
+
+                            echo "=== Writing .env file ==="
+                            cat > \\\${APP_DIR}/.env << ENVEOF
+IMAGE_TAG=${env.IMAGE_TAG}
+ECR_REGISTRY=${env.ECR_REGISTRY}
+FRONTEND_IMAGE=${env.FRONTEND_IMAGE}
+BACKEND_IMAGE=${env.BACKEND_IMAGE}
+DATABASE_URL=postgresql://bmi_user:${DB_PASSWORD}@db:5432/bmidb
+PORT=3000
+NODE_ENV=production
+FRONTEND_URL=http://${params.EC2_HOST}
+POSTGRES_DB=bmidb
+POSTGRES_USER=bmi_user
+POSTGRES_PASSWORD=${DB_PASSWORD}
+AWS_REGION=${params.AWS_REGION}
+ENVEOF
+                            echo ".env written"
+
+                            echo "=== ECR Login on EC2 ==="
+                            export AWS_ACCESS_KEY_ID=${AWS_KEY_ID}
+                            export AWS_SECRET_ACCESS_KEY=${AWS_KEY_SECRET}
+                            export AWS_DEFAULT_REGION=${params.AWS_REGION}
+                            aws ecr get-login-password --region ${params.AWS_REGION} | \
+                                docker login --username AWS --password-stdin ${env.ECR_REGISTRY}
+                            echo "ECR login successful"
+
+                            echo "=== Checking container status ==="
+                            cd \\\${APP_DIR}
+                            RUNNING=\\\$(docker compose -f docker-compose.prod.yml ps --services --filter status=running 2>/dev/null | wc -l || echo 0)
+                            echo "Running services count: \\\${RUNNING}"
+
+                            if [ "\\\${RUNNING}" -gt "0" ]; then
+                                echo "=== [ROLLING UPDATE] Containers running — pulling new images ==="
+                                docker compose -f docker-compose.prod.yml pull
+                                docker compose -f docker-compose.prod.yml up -d --remove-orphans
+                                echo "Rolling update complete"
+                            else
+                                echo "=== [FRESH DEPLOY] No containers running — starting fresh ==="
+                                docker compose -f docker-compose.prod.yml pull
+                                docker compose -f docker-compose.prod.yml up -d
+                                echo "Fresh deployment complete"
+                            fi
+
+                            echo "=== Container status ==="
+                            docker compose -f docker-compose.prod.yml ps
+REMOTE_SCRIPT
+                        """
+                    }
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 6: Health Check
+        // --------------------------------------------------------
+        stage('Health Check') {
+            steps {
+                script {
+                    sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                        sh """
+                            echo "Waiting 15 seconds for containers to fully start..."
+                            sleep 15
+
+                            ssh -o StrictHostKeyChecking=no \
+                                ${params.EC2_USER}@${params.EC2_HOST} '
+                                set -euo pipefail
+                                echo "=== Docker Compose Health Check ==="
+
+                                echo "--- Container Status ---"
+                                docker compose -f /home/ubuntu/bmi-docker/docker-compose.prod.yml ps
+
+                                echo ""
+                                echo "--- Frontend Health Check (port 80) ---"
+                                HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 3 http://localhost)
+                                if [ "\$HTTP_CODE" = "200" ]; then
+                                    echo "[OK] Frontend responding — HTTP \$HTTP_CODE"
+                                else
+                                    echo "[FAIL] Frontend returned HTTP \$HTTP_CODE"
+                                    docker compose -f /home/ubuntu/bmi-docker/docker-compose.prod.yml logs frontend --tail 20
+                                    exit 1
+                                fi
+
+                                echo ""
+                                echo "--- Backend API Health Check (port 3000) ---"
+                                API_CODE=\$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 3 http://localhost:3000/api/measurements)
+                                if [ "\$API_CODE" = "200" ]; then
+                                    echo "[OK] Backend API responding — HTTP \$API_CODE"
+                                else
+                                    echo "[FAIL] Backend API returned HTTP \$API_CODE"
+                                    docker compose -f /home/ubuntu/bmi-docker/docker-compose.prod.yml logs backend --tail 20
+                                    exit 1
+                                fi
+
+                                echo ""
+                                echo "=== All health checks passed ==="
+                            '
+                        """
+                    }
+                }
+            }
+        }
+
+    } // end stages
+
+    post {
+        success {
+            script {
+                echo "============================================================"
+                echo " [SUCCESS] Docker deployment complete"
+                echo " RC Build  : #${params.RC_BUILD_NUMBER}"
+                echo " Image Tag : ${env.IMAGE_TAG}"
+                echo " Target    : ${params.EC2_USER}@${params.EC2_HOST}"
+                echo " App URL   : http://${params.EC2_HOST}"
+                echo ""
+                echo " To rollback: re-run this pipeline with an older RC_BUILD_NUMBER"
+                echo "============================================================"
+
+                try {
+                    emailext(
+                        to: params.NOTIFY_EMAIL,
+                        subject: "[DEPLOY SUCCESS] BMI Health Tracker — ${env.IMAGE_TAG} live on ${params.EC2_HOST}",
+                        mimeType: 'text/html',
+                        body: """
+                            <h2 style="color:green">&#10004; Docker Deployment Successful</h2>
+                            <table border="1" cellpadding="6" cellspacing="0">
+                                <tr><td><b>RC Build #</b></td><td>${params.RC_BUILD_NUMBER}</td></tr>
+                                <tr><td><b>Image Tag</b></td><td>${env.IMAGE_TAG}</td></tr>
+                                <tr><td><b>Git Commit</b></td><td>${env.GIT_COMMIT_SHA}</td></tr>
+                                <tr><td><b>Built at</b></td><td>${env.RC_TIMESTAMP}</td></tr>
+                                <tr><td><b>Target</b></td><td>${params.EC2_USER}@${params.EC2_HOST}</td></tr>
+                                <tr><td><b>Frontend Image</b></td><td>${env.FRONTEND_IMAGE}</td></tr>
+                                <tr><td><b>Backend Image</b></td><td>${env.BACKEND_IMAGE}</td></tr>
+                                <tr><td><b>App URL</b></td><td><a href="http://${params.EC2_HOST}">http://${params.EC2_HOST}</a></td></tr>
+                                <tr><td><b>API URL</b></td><td><a href="http://${params.EC2_HOST}/api/measurements">http://${params.EC2_HOST}/api/measurements</a></td></tr>
+                                <tr><td><b>Console</b></td><td><a href="${BUILD_URL}console">${BUILD_URL}console</a></td></tr>
+                                <tr><td><b>Rollback</b></td><td>Re-run bmi-deploy-docker with an older RC_BUILD_NUMBER</td></tr>
+                            </table>
+                        """
+                    )
+                    echo "Email notification sent to: ${params.NOTIFY_EMAIL}"
+                } catch (emailEx) {
+                    echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                }
+            }
+        }
+
+        failure {
+            script {
+                echo "[FAILURE] Docker deployment failed — RC #${params.RC_BUILD_NUMBER} — review console output"
+
+                try {
+                    emailext(
+                        to: params.NOTIFY_EMAIL,
+                        subject: "[DEPLOY FAILED] BMI Health Tracker — RC #${params.RC_BUILD_NUMBER} failed on ${params.EC2_HOST}",
+                        mimeType: 'text/html',
+                        body: """
+                            <h2 style="color:red">&#10008; Docker Deployment Failed</h2>
+                            <p>Deployment of RC #${params.RC_BUILD_NUMBER} (${env.IMAGE_TAG ?: 'unknown'}) failed on <b>${params.EC2_HOST}</b>.</p>
+                            <p><a href="${BUILD_URL}console">View Console Output</a></p>
+                        """
+                    )
+                } catch (emailEx) {
+                    echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                }
+            }
+        }
+
+        always {
+            echo "Docker Deploy done | RC: #${params.RC_BUILD_NUMBER} | Tag: ${env.IMAGE_TAG ?: 'N/A'} | Target: ${params.EC2_HOST ?: 'N/A'} | Node: ${NODE_NAME}"
+        }
+    }
+}

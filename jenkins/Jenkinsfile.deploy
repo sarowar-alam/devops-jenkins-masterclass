@@ -1,0 +1,467 @@
+// ============================================================
+// BMI Health Tracker — Bare-Metal Deploy Pipeline (SL#5)
+// Deploys to AWS Ubuntu 24.04 EC2 via SSH
+//
+// Smart idempotent logic:
+//   Run 1 (fresh EC2) → installs everything from scratch
+//   Run 2+ (existing)  → backs up current deployment, pulls latest, redeploys
+//
+// Required Jenkins Credentials:
+//   ec2-ssh-key        → SSH Username with private key (EC2 .pem file)
+//   bmi-database-url   → Secret text (postgresql://bmi_user:PASS@localhost:5432/bmidb)
+//
+// Required Plugins:
+//   SSH Agent, Email Extension, Credentials Binding
+// ============================================================
+
+pipeline {
+    agent { label 'built-in' }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 40, unit: 'MINUTES')
+        ansiColor('xterm')
+    }
+
+    parameters {
+        string(
+            name: 'EC2_HOST',
+            defaultValue: '',
+            description: 'EC2 Public IP or hostname (required)'
+        )
+        string(
+            name: 'EC2_USER',
+            defaultValue: 'ubuntu',
+            description: 'SSH username on the EC2 instance'
+        )
+        string(
+            name: 'SSH_CREDENTIALS_ID',
+            defaultValue: 'ec2-ssh-key',
+            description: 'Jenkins Credential ID containing the EC2 SSH private key'
+        )
+        string(
+            name: 'NOTIFY_EMAIL',
+            defaultValue: '',
+            description: 'Email address for deployment notifications (required)'
+        )
+    }
+
+    environment {
+        APP_DIR    = '/home/ubuntu/bmi-health-tracker'
+        BACKUP_DIR = '/home/ubuntu/backups'
+        WEBROOT    = '/var/www/bmi-health-tracker'
+        GIT_REPO   = 'https://github.com/sarowar-alam/devops-jenkins-masterclass.git'
+        MARKER     = '/home/ubuntu/bmi-health-tracker/.deployed'
+    }
+
+    stages {
+
+        // --------------------------------------------------------
+        // Stage 1: Checkout
+        // --------------------------------------------------------
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Source code checked out on Jenkins master — Build #${BUILD_NUMBER}"
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 2: Validate Parameters
+        // --------------------------------------------------------
+        stage('Validate Parameters') {
+            steps {
+                script {
+                    if (!params.EC2_HOST?.trim()) {
+                        error("EC2_HOST is required. Provide the EC2 public IP or hostname.")
+                    }
+                    if (!params.NOTIFY_EMAIL?.trim()) {
+                        error("NOTIFY_EMAIL is required. Provide an email address for notifications.")
+                    }
+                    echo "Target server  : ${params.EC2_USER}@${params.EC2_HOST}"
+                    echo "Notification   : ${params.NOTIFY_EMAIL}"
+                    echo "Credential ID  : ${params.SSH_CREDENTIALS_ID}"
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 3: Pre-flight Check
+        // Detects whether this is a fresh deploy or an update
+        // --------------------------------------------------------
+        stage('Pre-flight Check') {
+            steps {
+                script {
+                    sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                        def result = sh(
+                            script: """
+                                ssh -o StrictHostKeyChecking=no \
+                                    -o ConnectTimeout=30 \
+                                    ${params.EC2_USER}@${params.EC2_HOST} \
+                                    'test -f ${MARKER} && echo EXISTS || echo FRESH'
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        env.DEPLOY_MODE = result
+                        echo "============================================"
+                        echo " Deployment mode : ${env.DEPLOY_MODE}"
+                        if (env.DEPLOY_MODE == 'FRESH') {
+                            echo " Action          : Full installation"
+                        } else {
+                            echo " Action          : Backup + update"
+                        }
+                        echo "============================================"
+                    }
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 4A: Fresh Install
+        // Runs ONLY when no .deployed marker found
+        // --------------------------------------------------------
+        stage('Fresh Install') {
+            when {
+                expression { env.DEPLOY_MODE == 'FRESH' }
+            }
+            steps {
+                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                    withCredentials([
+                        string(credentialsId: 'bmi-database-url', variable: 'DATABASE_URL')
+                    ]) {
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
+                                set -euo pipefail
+                                echo "=== [FRESH INSTALL] Starting ==="
+
+                                # System update
+                                sudo apt-get update -qq
+                                sudo apt-get install -y git curl
+
+                                # Node.js 20.x via NodeSource
+                                if ! command -v node &>/dev/null; then
+                                    echo "Installing Node.js 20.x..."
+                                    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                                    sudo apt-get install -y nodejs
+                                fi
+                                echo "Node.js: \$(node --version) | npm: \$(npm --version)"
+
+                                # Nginx
+                                sudo apt-get install -y nginx
+                                sudo systemctl enable nginx
+
+                                # PM2 globally
+                                sudo npm install -g pm2
+
+                                # PostgreSQL 14
+                                if ! command -v psql &>/dev/null; then
+                                    echo "Installing PostgreSQL 14..."
+                                    sudo apt-get install -y postgresql-14 postgresql-contrib-14
+                                fi
+                                sudo systemctl enable postgresql
+                                sudo systemctl start postgresql
+
+                                # Create backup directory
+                                mkdir -p ${BACKUP_DIR}
+
+                                echo "=== [FRESH INSTALL] System packages ready ==="
+REMOTE_SCRIPT
+                        """
+
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
+                                set -euo pipefail
+
+                                # Clone repository
+                                echo "=== [FRESH INSTALL] Cloning repository ==="
+                                sudo rm -rf ${APP_DIR}
+                                git clone ${GIT_REPO} ${APP_DIR}
+                                echo "Cloned to: ${APP_DIR}"
+                                cd ${APP_DIR}
+                                git log --oneline -3
+
+                                echo "=== [FRESH INSTALL] Setting up database ==="
+                                sudo bash ${APP_DIR}/database/setup-database.sh
+
+                                # Run migrations explicitly (setup script may also run them)
+                                sudo -u postgres psql -d bmidb -f ${APP_DIR}/backend/migrations/001_create_measurements.sql 2>/dev/null || true
+                                sudo -u postgres psql -d bmidb -f ${APP_DIR}/backend/migrations/002_add_measurement_date.sql 2>/dev/null || true
+                                echo "Migrations complete"
+REMOTE_SCRIPT
+                        """
+
+                        // Inject DATABASE_URL from Jenkins credential into the remote .env
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+                                set -euo pipefail
+
+                                echo "=== [FRESH INSTALL] Configuring backend ==="
+                                cd ${APP_DIR}/backend
+                                npm install --omit=dev
+
+                                # Write .env file
+                                cat > ${APP_DIR}/backend/.env << EOF
+PORT=3000
+DATABASE_URL=${DATABASE_URL}
+NODE_ENV=production
+FRONTEND_URL=http://${params.EC2_HOST}
+EOF
+                                echo ".env created"
+
+                                # Start with PM2
+                                pm2 start ecosystem.config.js
+                                pm2 save
+                                sudo env PATH=\$PATH:/usr/bin pm2 startup systemd -u ubuntu --hp /home/ubuntu
+                                echo "PM2 started — bmi-backend"
+
+                                echo "=== [FRESH INSTALL] Building frontend ==="
+                                cd ${APP_DIR}/frontend
+                                npm install
+                                npm run build
+                                echo "Frontend built — dist/ ready"
+
+                                echo "=== [FRESH INSTALL] Deploying frontend to Nginx ==="
+                                sudo mkdir -p ${WEBROOT}
+                                sudo cp -r ${APP_DIR}/frontend/dist/* ${WEBROOT}/
+                                sudo chown -R www-data:www-data ${WEBROOT}
+
+                                # Write Nginx virtual host config
+                                sudo tee /etc/nginx/sites-available/bmi-health-tracker > /dev/null << NGINXEOF
+server {
+    listen 80;
+    server_name _;
+
+    root ${WEBROOT};
+    index index.html;
+
+    # React SPA routing — serve index.html for all non-file routes
+    location / {
+        try_files \\\$uri \\\$uri/ /index.html;
+    }
+
+    # Proxy API requests to Node.js backend
+    location /api {
+        proxy_pass         http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              \\\$host;
+        proxy_set_header   X-Real-IP         \\\$remote_addr;
+        proxy_set_header   X-Forwarded-For   \\\$proxy_add_x_forwarded_for;
+        proxy_set_header   Connection        "";
+        proxy_read_timeout 60s;
+    }
+}
+NGINXEOF
+
+                                sudo ln -sf /etc/nginx/sites-available/bmi-health-tracker \
+                                            /etc/nginx/sites-enabled/bmi-health-tracker
+                                sudo rm -f /etc/nginx/sites-enabled/default
+                                sudo nginx -t
+                                sudo systemctl reload nginx
+                                echo "Nginx configured and reloaded"
+
+                                # Write deployment marker
+                                echo "Deployed: \$(date -u +%Y-%m-%dT%H:%M:%SZ) | Build: ${BUILD_NUMBER} | Mode: FRESH" \
+                                    > ${MARKER}
+                                echo "=== [FRESH INSTALL] Complete ==="
+                            '
+                        """
+                    }
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 4B: Update Existing Deployment
+        // Runs ONLY when .deployed marker exists
+        // --------------------------------------------------------
+        stage('Update Existing Deployment') {
+            when {
+                expression { env.DEPLOY_MODE == 'EXISTS' }
+            }
+            steps {
+                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+                            set -euo pipefail
+                            TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
+                            BACKUP_PATH=${BACKUP_DIR}/bmi-\${TIMESTAMP}
+
+                            echo "=== [UPDATE] Creating backup at \${BACKUP_PATH} ==="
+                            mkdir -p \${BACKUP_PATH}
+
+                            # Backup current source directories
+                            cp -r ${APP_DIR}/backend/src   \${BACKUP_PATH}/backend-src   2>/dev/null || true
+                            cp -r ${APP_DIR}/frontend/src  \${BACKUP_PATH}/frontend-src  2>/dev/null || true
+
+                            # Backup current served frontend build
+                            sudo cp -r ${WEBROOT} \${BACKUP_PATH}/dist-backup 2>/dev/null || true
+
+                            # Record what is being backed up
+                            echo "Backup of build: \$(cat ${MARKER} 2>/dev/null || echo unknown)" \
+                                > \${BACKUP_PATH}/backup-info.txt
+
+                            echo "Backup complete: \${BACKUP_PATH}"
+
+                            echo "=== [UPDATE] Pulling latest code ==="
+                            cd ${APP_DIR}
+                            git fetch origin
+                            git reset --hard origin/main
+                            echo "Updated to: \$(git log --oneline -1)"
+
+                            echo "=== [UPDATE] Updating backend dependencies ==="
+                            cd ${APP_DIR}/backend
+                            npm install --omit=dev
+
+                            echo "=== [UPDATE] Rebuilding frontend ==="
+                            cd ${APP_DIR}/frontend
+                            npm install
+                            npm run build
+                            echo "Frontend rebuilt"
+
+                            echo "=== [UPDATE] Deploying new frontend build ==="
+                            sudo cp -r ${APP_DIR}/frontend/dist/* ${WEBROOT}/
+                            sudo chown -R www-data:www-data ${WEBROOT}
+
+                            echo "=== [UPDATE] Restarting backend ==="
+                            pm2 restart bmi-backend
+                            echo "PM2 restart: bmi-backend done"
+
+                            echo "=== [UPDATE] Reloading Nginx ==="
+                            sudo nginx -t
+                            sudo systemctl reload nginx
+                            echo "Nginx reloaded"
+
+                            # Update deployment marker
+                            echo "Deployed: \$(date -u +%Y-%m-%dT%H:%M:%SZ) | Build: ${BUILD_NUMBER} | Mode: UPDATE | Backup: \${BACKUP_PATH}" \
+                                > ${MARKER}
+
+                            echo "=== [UPDATE] Complete ==="
+                        '
+                    """
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 5: Health Check
+        // --------------------------------------------------------
+        stage('Health Check') {
+            steps {
+                script {
+                    sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                        sh """
+                            echo "Waiting 5 seconds for services to stabilise..."
+                            sleep 5
+
+                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+                                set -euo pipefail
+                                echo "=== Health Checks ==="
+
+                                echo "--- Frontend (Nginx port 80) ---"
+                                HTTP_CODE=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
+                                if [ "\$HTTP_CODE" = "200" ]; then
+                                    echo "[OK] Frontend responding — HTTP \$HTTP_CODE"
+                                else
+                                    echo "[FAIL] Frontend returned HTTP \$HTTP_CODE"
+                                    exit 1
+                                fi
+
+                                echo "--- Backend API (port 3000) ---"
+                                API_CODE=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/measurements)
+                                if [ "\$API_CODE" = "200" ]; then
+                                    echo "[OK] Backend API responding — HTTP \$API_CODE"
+                                else
+                                    echo "[FAIL] Backend API returned HTTP \$API_CODE"
+                                    exit 1
+                                fi
+
+                                echo "--- PM2 Process Status ---"
+                                pm2 status
+
+                                echo "--- PostgreSQL Status ---"
+                                sudo systemctl is-active postgresql && echo "[OK] PostgreSQL running" || echo "[FAIL] PostgreSQL not running"
+
+                                echo "=== All health checks passed ==="
+                            '
+                        """
+                    }
+                }
+            }
+        }
+
+    } // end stages
+
+    // --------------------------------------------------------
+    // Post Actions — Notifications
+    // --------------------------------------------------------
+    post {
+        success {
+            script {
+                echo "============================================================"
+                echo " [SUCCESS] Deployment complete"
+                echo " Build     : #${BUILD_NUMBER}"
+                echo " Mode      : ${env.DEPLOY_MODE}"
+                echo " Target    : ${params.EC2_USER}@${params.EC2_HOST}"
+                echo " App URL   : http://${params.EC2_HOST}"
+                echo "============================================================"
+
+                try {
+                    emailext(
+                        to: params.NOTIFY_EMAIL,
+                        subject: "[SUCCESS] BMI Health Tracker Deployed — Build #${BUILD_NUMBER}",
+                        mimeType: 'text/html',
+                        body: """
+                            <h2 style="color:green">&#10004; Deployment Successful</h2>
+                            <table border="1" cellpadding="6" cellspacing="0">
+                                <tr><td><b>Job</b></td><td>${JOB_NAME}</td></tr>
+                                <tr><td><b>Build #</b></td><td>${BUILD_NUMBER}</td></tr>
+                                <tr><td><b>Deploy Mode</b></td><td>${env.DEPLOY_MODE}</td></tr>
+                                <tr><td><b>Target</b></td><td>${params.EC2_USER}@${params.EC2_HOST}</td></tr>
+                                <tr><td><b>App URL</b></td><td><a href="http://${params.EC2_HOST}">http://${params.EC2_HOST}</a></td></tr>
+                                <tr><td><b>API URL</b></td><td><a href="http://${params.EC2_HOST}/api/measurements">http://${params.EC2_HOST}/api/measurements</a></td></tr>
+                                <tr><td><b>Console</b></td><td><a href="${BUILD_URL}console">${BUILD_URL}console</a></td></tr>
+                            </table>
+                        """
+                    )
+                    echo "Email notification sent to: ${params.NOTIFY_EMAIL}"
+                } catch (emailEx) {
+                    echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                }
+            }
+        }
+
+        failure {
+            script {
+                echo "[FAILURE] Deployment failed — Build #${BUILD_NUMBER} — review console output above"
+
+                try {
+                    emailext(
+                        to: params.NOTIFY_EMAIL,
+                        subject: "[FAILED] BMI Health Tracker Deployment Failed — Build #${BUILD_NUMBER}",
+                        mimeType: 'text/html',
+                        body: """
+                            <h2 style="color:red">&#10008; Deployment Failed</h2>
+                            <p>Build #${BUILD_NUMBER} failed during deployment to <b>${params.EC2_HOST}</b>.</p>
+                            <table border="1" cellpadding="6" cellspacing="0">
+                                <tr><td><b>Job</b></td><td>${JOB_NAME}</td></tr>
+                                <tr><td><b>Build #</b></td><td>${BUILD_NUMBER}</td></tr>
+                                <tr><td><b>Target</b></td><td>${params.EC2_USER}@${params.EC2_HOST}</td></tr>
+                                <tr><td><b>Console</b></td><td><a href="${BUILD_URL}console">${BUILD_URL}console</a></td></tr>
+                            </table>
+                            <p>Check the console output link above for the full error details.</p>
+                        """
+                    )
+                    echo "Failure notification sent to: ${params.NOTIFY_EMAIL}"
+                } catch (emailEx) {
+                    echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                }
+            }
+        }
+
+        always {
+            echo "Pipeline done | Build: #${BUILD_NUMBER} | Mode: ${env.DEPLOY_MODE ?: 'N/A'} | Target: ${params.EC2_HOST ?: 'N/A'} | Node: ${NODE_NAME}"
+        }
+    }
+}

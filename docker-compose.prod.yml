@@ -1,0 +1,140 @@
+# ============================================================
+# BMI Health Tracker — Production Docker Compose
+# Used by: jenkins/Jenkinsfile.deploy-docker
+#
+# Three services:
+#   frontend  → React SPA served by Nginx (port 80 → host)
+#   backend   → Node.js/Express API (internal only, port 3000)
+#   db        → PostgreSQL 14 (internal only, port 5432)
+#
+# Image URIs and credentials are injected via .env file at deploy time.
+# The .env file is written by Jenkinsfile.deploy-docker before this
+# compose file is executed.
+#
+# Required .env variables:
+#   FRONTEND_IMAGE    full ECR URI, e.g. 123456.dkr.ecr.us-east-1.amazonaws.com/bmi-frontend:rc-42
+#   BACKEND_IMAGE     full ECR URI, e.g. 123456.dkr.ecr.us-east-1.amazonaws.com/bmi-backend:rc-42
+#   DATABASE_URL      postgresql://bmi_user:PASS@db:5432/bmidb
+#   POSTGRES_DB       bmidb
+#   POSTGRES_USER     bmi_user
+#   POSTGRES_PASSWORD your-strong-password
+#   PORT              3000
+#   NODE_ENV          production
+#   FRONTEND_URL      http://<EC2_IP>
+# ============================================================
+
+services:
+
+  # ── Frontend (Nginx + React SPA) ───────────────────────────
+  frontend:
+    image: ${FRONTEND_IMAGE}
+    container_name: bmi-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - bmi-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Backend (Node.js / Express API) ────────────────────────
+  backend:
+    image: ${BACKEND_IMAGE}
+    container_name: bmi-backend
+    restart: unless-stopped
+    # Port 3000 is NOT published to the host.
+    # It is only reachable from the frontend container via the
+    # internal Docker network using the service name 'backend'.
+    expose:
+      - "3000"
+    environment:
+      PORT: ${PORT:-3000}
+      DATABASE_URL: ${DATABASE_URL}
+      NODE_ENV: ${NODE_ENV:-production}
+      FRONTEND_URL: ${FRONTEND_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - bmi-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/measurements"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ── Database (PostgreSQL 14) ────────────────────────────────
+  db:
+    image: postgres:14-alpine
+    container_name: bmi-db
+    restart: unless-stopped
+    # Port 5432 is NOT published to the host.
+    # Only the backend service can reach it via the Docker network.
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bmidb}
+      POSTGRES_USER: ${POSTGRES_USER:-bmi_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Performance tuning for a small EC2 instance
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    volumes:
+      # Persistent volume — database data survives container restarts and re-deploys
+      - db_data:/var/lib/postgresql/data
+      # SQL init scripts — run in alphabetical order on FIRST start only
+      # (if the volume already has data, these scripts are skipped)
+      - ./migrations/01-create_measurements.sql:/docker-entrypoint-initdb.d/01-create_measurements.sql:ro
+      - ./migrations/02-add_measurement_date.sql:/docker-entrypoint-initdb.d/02-add_measurement_date.sql:ro
+    networks:
+      - bmi-network
+    healthcheck:
+      # Check that PostgreSQL is accepting connections for the bmidb database
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bmi_user} -d ${POSTGRES_DB:-bmidb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+# ── Volumes ───────────────────────────────────────────────────
+volumes:
+  db_data:
+    driver: local
+    # This named volume persists the PostgreSQL data directory.
+    # It is preserved across:
+    #   - docker compose restart
+    #   - docker compose up -d --remove-orphans (rolling updates)
+    # It is ONLY deleted if you run: docker compose down -v
+    # Do NOT run "down -v" in production — it deletes all database data.
+
+
+# ── Networks ──────────────────────────────────────────────────
+networks:
+  bmi-network:
+    driver: bridge
+    # All three services communicate on this internal network.
+    # Only the frontend container exposes port 80 to the host.
+    # The backend and database are isolated from the internet.

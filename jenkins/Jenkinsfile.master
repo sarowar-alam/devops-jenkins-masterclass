@@ -1,0 +1,112 @@
+// ============================================================
+// BMI Health Tracker — Pipeline: MASTER NODE (SL#4)
+// Runs on the Jenkins Controller (built-in node)
+// Job name:  bmi-pipeline-master
+// Repo:      https://github.com/sarowar-alam/devops-jenkins-masterclass
+// ============================================================
+
+pipeline {
+    agent { label 'built-in' }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 10, unit: 'MINUTES')
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Repository checked out on MASTER node — Build #${BUILD_NUMBER}"
+            }
+        }
+
+        stage('Verify Environment') {
+            steps {
+                sh '''
+                    echo "============================================================"
+                    echo "  Running on : MASTER (built-in controller node)"
+                    echo "============================================================"
+                    echo "  Hostname     : $(hostname -f)"
+                    echo "  OS           : $(uname -srm)"
+                    echo "  Kernel       : $(uname -r)"
+                    echo "  User         : $(whoami)"
+                    echo "  Java Version : $(java -version 2>&1 | head -1)"
+                    echo "  Node.js      : $(node --version 2>/dev/null || echo 'not installed')"
+                    echo "  Git          : $(git --version)"
+                    echo "  Workspace    : ${WORKSPACE}"
+                    echo "  Build Number : ${BUILD_NUMBER}"
+                    echo "  Branch       : ${GIT_BRANCH}"
+                    echo "  Commit SHA   : ${GIT_COMMIT}"
+                    echo "============================================================"
+                '''
+            }
+        }
+
+        stage('List Files') {
+            steps {
+                sh '''
+                    echo "--- Repository Root ---"
+                    ls -la
+
+                    echo ""
+                    echo "--- backend/ ---"
+                    ls -la backend/ || echo "[WARN] backend/ directory not found"
+
+                    echo ""
+                    echo "--- backend/src/ ---"
+                    ls -la backend/src/ || echo "[WARN] backend/src/ not found"
+
+                    echo ""
+                    echo "--- frontend/ ---"
+                    ls -la frontend/ || echo "[WARN] frontend/ directory not found"
+
+                    echo ""
+                    echo "--- database/ ---"
+                    ls -la database/ || echo "[WARN] database/ directory not found"
+
+                    echo ""
+                    echo "--- jenkins/ (Jenkinsfiles) ---"
+                    ls -la jenkins/ || echo "[WARN] jenkins/ directory not found"
+                '''
+            }
+        }
+
+        stage('Build Report') {
+            steps {
+                sh '''
+                    echo ""
+                    echo "╔══════════════════════════════════════════════════════╗"
+                    echo "║           BUILD REPORT — MASTER NODE                ║"
+                    echo "╠══════════════════════════════════════════════════════╣"
+                    echo "║  Job Name     : '"${JOB_NAME}"'       "
+                    echo "║  Build #      : '"${BUILD_NUMBER}"'                          "
+                    echo "║  Node Name    : '"${NODE_NAME}"'            "
+                    echo "║  Executor #   : '"${EXECUTOR_NUMBER}"'                       "
+                    echo "║  Workspace    : '"${WORKSPACE}"'  "
+                    echo "║  Build URL    : '"${BUILD_URL}"'  "
+                    echo "║  Git Branch   : '"${GIT_BRANCH}"'        "
+                    echo "║  Git Commit   : '"${GIT_COMMIT}"'  "
+                    echo "║  Executed by  : MASTER / Built-in Controller Node   ║"
+                    echo "╚══════════════════════════════════════════════════════╝"
+                    echo ""
+                '''
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo "[SUCCESS] Master node pipeline completed — Build #${BUILD_NUMBER} on node: ${NODE_NAME}"
+        }
+        failure {
+            echo "[FAILURE] Master node pipeline failed — Build #${BUILD_NUMBER} — review console output above"
+        }
+        always {
+            echo "[ALWAYS] Pipeline finished | Node: ${NODE_NAME} | Build: #${BUILD_NUMBER} | Branch: ${GIT_BRANCH}"
+        }
+    }
+}

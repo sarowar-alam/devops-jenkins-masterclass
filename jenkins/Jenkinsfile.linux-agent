@@ -1,0 +1,130 @@
+// ============================================================
+// BMI Health Tracker — Pipeline: LINUX AGENT (SL#4)
+// Runs on the Ubuntu 24.04 LTS agent node
+// Job name:  bmi-pipeline-linux
+// Agent:     linux-agent (label must match node configuration)
+// Repo:      https://github.com/sarowar-alam/devops-jenkins-masterclass
+// ============================================================
+
+pipeline {
+    agent { label 'linux-agent' }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 10, unit: 'MINUTES')
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Repository checked out on LINUX AGENT — Build #${BUILD_NUMBER}"
+            }
+        }
+
+        stage('Verify Environment') {
+            steps {
+                sh '''
+                    echo "============================================================"
+                    echo "  Running on : LINUX AGENT (ubuntu-24.04)"
+                    echo "============================================================"
+                    echo "  Hostname     : $(hostname -f)"
+                    echo "  OS           : $(lsb_release -d | cut -f2-)"
+                    echo "  Kernel       : $(uname -r)"
+                    echo "  Architecture : $(uname -m)"
+                    echo "  User         : $(whoami)"
+                    echo "  Java Version : $(java -version 2>&1 | head -1)"
+                    echo "  Node.js      : $(node --version 2>/dev/null || echo 'not installed')"
+                    echo "  npm          : $(npm --version 2>/dev/null || echo 'not installed')"
+                    echo "  Git          : $(git --version)"
+                    echo "  Disk Space   : $(df -h / | awk 'NR==2{print $4}') available"
+                    echo "  Memory       : $(free -m | awk 'NR==2{printf \"Used: %sMB / Total: %sMB\", $3,$2}')"
+                    echo "  Workspace    : ${WORKSPACE}"
+                    echo "  Build Number : ${BUILD_NUMBER}"
+                    echo "  Branch       : ${GIT_BRANCH}"
+                    echo "  Commit SHA   : ${GIT_COMMIT}"
+                    echo "============================================================"
+                '''
+            }
+        }
+
+        stage('List Files') {
+            steps {
+                sh '''
+                    echo "--- Repository Root ---"
+                    ls -la
+
+                    echo ""
+                    echo "--- backend/ ---"
+                    ls -la backend/ || echo "[WARN] backend/ directory not found"
+
+                    echo ""
+                    echo "--- backend/src/ ---"
+                    ls -la backend/src/ || echo "[WARN] backend/src/ not found"
+
+                    echo ""
+                    echo "--- backend/migrations/ ---"
+                    ls -la backend/migrations/ || echo "[WARN] backend/migrations/ not found"
+
+                    echo ""
+                    echo "--- frontend/ ---"
+                    ls -la frontend/ || echo "[WARN] frontend/ directory not found"
+
+                    echo ""
+                    echo "--- frontend/src/ ---"
+                    ls -la frontend/src/ || echo "[WARN] frontend/src/ not found"
+
+                    echo ""
+                    echo "--- database/ ---"
+                    ls -la database/ || echo "[WARN] database/ directory not found"
+
+                    echo ""
+                    echo "--- jenkins/ (Jenkinsfiles) ---"
+                    ls -la jenkins/ || echo "[WARN] jenkins/ directory not found"
+
+                    echo ""
+                    echo "--- Recent Git Log ---"
+                    git log --oneline -5
+                '''
+            }
+        }
+
+        stage('Build Report') {
+            steps {
+                sh '''
+                    echo ""
+                    echo "╔══════════════════════════════════════════════════════╗"
+                    echo "║           BUILD REPORT — LINUX AGENT                ║"
+                    echo "╠══════════════════════════════════════════════════════╣"
+                    echo "║  Job Name     : '"${JOB_NAME}"'       "
+                    echo "║  Build #      : '"${BUILD_NUMBER}"'                          "
+                    echo "║  Node Name    : '"${NODE_NAME}"'           "
+                    echo "║  Executor #   : '"${EXECUTOR_NUMBER}"'                       "
+                    echo "║  Workspace    : '"${WORKSPACE}"'  "
+                    echo "║  Build URL    : '"${BUILD_URL}"'  "
+                    echo "║  Git Branch   : '"${GIT_BRANCH}"'        "
+                    echo "║  Git Commit   : '"${GIT_COMMIT}"'  "
+                    echo "║  Platform     : Linux (Ubuntu 24.04 LTS)            ║"
+                    echo "║  Executed by  : linux-agent node                    ║"
+                    echo "╚══════════════════════════════════════════════════════╝"
+                    echo ""
+                '''
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo "[SUCCESS] Linux agent pipeline completed — Build #${BUILD_NUMBER} on node: ${NODE_NAME}"
+        }
+        failure {
+            echo "[FAILURE] Linux agent pipeline failed — Build #${BUILD_NUMBER} — review console output above"
+        }
+        always {
+            echo "[ALWAYS] Pipeline finished | Node: ${NODE_NAME} | Build: #${BUILD_NUMBER} | Branch: ${GIT_BRANCH}"
+        }
+    }
+}

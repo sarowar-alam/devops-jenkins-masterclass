@@ -1,0 +1,314 @@
+// ============================================================
+// BMI Health Tracker — RC Build Pipeline (SL#6)
+// Builds Docker images for frontend and backend,
+// tags them as rc-<BUILD_NUMBER>, pushes to Amazon ECR,
+// and archives build-manifest.json for the deploy pipeline.
+//
+// Job name: bmi-rc-pipeline
+//
+// Required Jenkins Credentials:
+//   aws-credentials  → Username with password
+//                      Username = AWS_ACCESS_KEY_ID
+//                      Password = AWS_SECRET_ACCESS_KEY
+//
+// Required Jenkins Plugins:
+//   Docker Pipeline, Credentials Binding, Email Extension, Timestamper
+//
+// Required on Jenkins controller:
+//   - Docker Engine installed and running
+//   - AWS CLI v2 installed
+// ============================================================
+
+pipeline {
+    agent { label 'built-in' }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
+    environment {
+        AWS_REGION     = 'us-east-1'
+        FRONTEND_REPO  = 'bmi-frontend'
+        BACKEND_REPO   = 'bmi-backend'
+        IMAGE_TAG      = "rc-${BUILD_NUMBER}"
+        // ECR_REGISTRY is set dynamically in 'ECR Login' stage from AWS account ID
+    }
+
+    stages {
+
+        // --------------------------------------------------------
+        // Stage 1: Checkout
+        // --------------------------------------------------------
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Repository checked out — RC Build #${BUILD_NUMBER} | Tag: ${IMAGE_TAG}"
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 2: ECR Login
+        // Resolves the ECR registry URL and authenticates Docker
+        // --------------------------------------------------------
+        stage('ECR Login') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
+                        // Get the AWS account ID to build the ECR registry hostname
+                        def accountId = sh(
+                            script: """
+                                AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+                                AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+                                AWS_DEFAULT_REGION=${AWS_REGION} \
+                                aws sts get-caller-identity \
+                                    --query Account \
+                                    --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        env.ECR_REGISTRY = "${accountId}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+                        echo "ECR Registry resolved: ${env.ECR_REGISTRY}"
+
+                        // Authenticate Docker to ECR
+                        sh """
+                            AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+                            AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+                            AWS_DEFAULT_REGION=${AWS_REGION} \
+                            aws ecr get-login-password --region ${AWS_REGION} | \
+                                docker login \
+                                    --username AWS \
+                                    --password-stdin ${env.ECR_REGISTRY}
+                        """
+                        echo "Docker authenticated to ECR successfully"
+                    }
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 3: Create ECR Repositories (idempotent)
+        // Creates the repos if they do not already exist
+        // --------------------------------------------------------
+        stage('Create ECR Repositories') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'aws-credentials',
+                    usernameVariable: 'AWS_ACCESS_KEY_ID',
+                    passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                )]) {
+                    sh """
+                        export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                        export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                        export AWS_DEFAULT_REGION=${AWS_REGION}
+
+                        for REPO in ${FRONTEND_REPO} ${BACKEND_REPO}; do
+                            if aws ecr describe-repositories \
+                                    --repository-names \$REPO \
+                                    --region ${AWS_REGION} > /dev/null 2>&1; then
+                                echo "[EXISTS] ECR repo already exists: \$REPO"
+                            else
+                                echo "[CREATE] Creating ECR repo: \$REPO"
+                                aws ecr create-repository \
+                                    --repository-name \$REPO \
+                                    --region ${AWS_REGION} \
+                                    --image-scanning-configuration scanOnPush=true
+                                echo "[OK] ECR repo created: \$REPO"
+                            fi
+                        done
+                    """
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 4: Build Frontend Image
+        // Multi-stage build: node:20-alpine (vite build) → nginx:alpine
+        // --------------------------------------------------------
+        stage('Build Frontend Image') {
+            steps {
+                sh """
+                    echo "Building frontend image: ${FRONTEND_REPO}:${IMAGE_TAG}"
+                    docker build \\
+                        -f Dockerfile.frontend \\
+                        -t ${FRONTEND_REPO}:${IMAGE_TAG} \\
+                        --label "org.opencontainers.image.revision=\$(git rev-parse --short HEAD)" \\
+                        --label "org.opencontainers.image.created=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
+                        --label "org.opencontainers.image.version=${IMAGE_TAG}" \\
+                        --label "build.number=${BUILD_NUMBER}" \\
+                        .
+                    echo "Frontend image built successfully: ${FRONTEND_REPO}:${IMAGE_TAG}"
+                    docker images ${FRONTEND_REPO}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 5: Build Backend Image
+        // Single-stage: node:20-alpine with production dependencies only
+        // --------------------------------------------------------
+        stage('Build Backend Image') {
+            steps {
+                sh """
+                    echo "Building backend image: ${BACKEND_REPO}:${IMAGE_TAG}"
+                    docker build \\
+                        -f Dockerfile.backend \\
+                        -t ${BACKEND_REPO}:${IMAGE_TAG} \\
+                        --label "org.opencontainers.image.revision=\$(git rev-parse --short HEAD)" \\
+                        --label "org.opencontainers.image.created=\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
+                        --label "org.opencontainers.image.version=${IMAGE_TAG}" \\
+                        --label "build.number=${BUILD_NUMBER}" \\
+                        ./backend
+                    echo "Backend image built successfully: ${BACKEND_REPO}:${IMAGE_TAG}"
+                    docker images ${BACKEND_REPO}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 6: Tag and Push to ECR
+        // Tags both images with full ECR URI and pushes them
+        // Archives build-manifest.json as a Jenkins artifact
+        // --------------------------------------------------------
+        stage('Push to ECR') {
+            steps {
+                script {
+                    def frontendUri = "${env.ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}"
+                    def backendUri  = "${env.ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}"
+
+                    // Tag with full ECR URI
+                    sh """
+                        docker tag ${FRONTEND_REPO}:${IMAGE_TAG} ${frontendUri}
+                        docker tag ${BACKEND_REPO}:${IMAGE_TAG}  ${backendUri}
+                        echo "Images tagged for ECR"
+                    """
+
+                    // Push both images
+                    sh """
+                        echo "Pushing: ${frontendUri}"
+                        docker push ${frontendUri}
+                        echo "Pushed frontend successfully"
+
+                        echo "Pushing: ${backendUri}"
+                        docker push ${backendUri}
+                        echo "Pushed backend successfully"
+                    """
+
+                    // Create and archive build manifest
+                    def gitCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def timestamp = sh(script: "date -u +%Y-%m-%dT%H:%M:%SZ", returnStdout: true).trim()
+
+                    writeFile file: 'build-manifest.json', text: """{
+  "buildNumber": "${BUILD_NUMBER}",
+  "imageTag": "${IMAGE_TAG}",
+  "timestamp": "${timestamp}",
+  "gitCommit": "${gitCommit}",
+  "gitBranch": "${GIT_BRANCH}",
+  "images": {
+    "frontend": "${frontendUri}",
+    "backend":  "${backendUri}"
+  },
+  "ecrRegistry": "${env.ECR_REGISTRY}",
+  "awsRegion": "${AWS_REGION}"
+}
+"""
+                    echo "Build manifest:"
+                    sh 'cat build-manifest.json'
+
+                    archiveArtifacts(
+                        artifacts: 'build-manifest.json',
+                        fingerprint: true,
+                        onlyIfSuccessful: true
+                    )
+                    echo "build-manifest.json archived as Jenkins artifact"
+                }
+            }
+        }
+
+        // --------------------------------------------------------
+        // Stage 7: Cleanup Local Images
+        // Removes local copies — they are now in ECR
+        // --------------------------------------------------------
+        stage('Cleanup Local Images') {
+            steps {
+                sh """
+                    echo "Cleaning up local Docker images..."
+                    docker rmi ${env.ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG} || true
+                    docker rmi ${env.ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}  || true
+                    docker rmi ${FRONTEND_REPO}:${IMAGE_TAG} || true
+                    docker rmi ${BACKEND_REPO}:${IMAGE_TAG}  || true
+                    echo "Local images removed"
+                """
+            }
+        }
+
+    } // end stages
+
+    post {
+        success {
+            script {
+                echo "============================================================"
+                echo " [SUCCESS] RC Build #${BUILD_NUMBER} complete"
+                echo " Frontend : ${env.ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}"
+                echo " Backend  : ${env.ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}"
+                echo ""
+                echo " Run bmi-deploy-docker pipeline with:"
+                echo "   RC_BUILD_NUMBER = ${BUILD_NUMBER}"
+                echo "============================================================"
+
+                try {
+                    emailext(
+                        to: '${DEFAULT_RECIPIENTS}',
+                        subject: "[RC BUILD SUCCESS] BMI Health Tracker — ${IMAGE_TAG} ready in ECR",
+                        mimeType: 'text/html',
+                        body: """
+                            <h2 style="color:green">&#10004; RC Build Successful — ${IMAGE_TAG}</h2>
+                            <p>Docker images are ready in ECR. Run <b>bmi-deploy-docker</b> with <b>RC_BUILD_NUMBER = ${BUILD_NUMBER}</b>.</p>
+                            <table border="1" cellpadding="6" cellspacing="0">
+                                <tr><td><b>Build #</b></td><td>${BUILD_NUMBER}</td></tr>
+                                <tr><td><b>Image Tag</b></td><td>${IMAGE_TAG}</td></tr>
+                                <tr><td><b>Frontend Image</b></td><td>${env.ECR_REGISTRY}/${FRONTEND_REPO}:${IMAGE_TAG}</td></tr>
+                                <tr><td><b>Backend Image</b></td><td>${env.ECR_REGISTRY}/${BACKEND_REPO}:${IMAGE_TAG}</td></tr>
+                                <tr><td><b>Console</b></td><td><a href="${BUILD_URL}console">${BUILD_URL}console</a></td></tr>
+                                <tr><td><b>Manifest</b></td><td><a href="${BUILD_URL}artifact/build-manifest.json">Download build-manifest.json</a></td></tr>
+                            </table>
+                        """
+                    )
+                } catch (emailEx) {
+                    echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                }
+            }
+        }
+
+        failure {
+            script {
+                echo "[FAILURE] RC Build #${BUILD_NUMBER} failed — review console output"
+
+                try {
+                    emailext(
+                        to: '${DEFAULT_RECIPIENTS}',
+                        subject: "[RC BUILD FAILED] BMI Health Tracker — Build #${BUILD_NUMBER}",
+                        mimeType: 'text/html',
+                        body: """
+                            <h2 style="color:red">&#10008; RC Build Failed</h2>
+                            <p>RC Build #${BUILD_NUMBER} (${IMAGE_TAG}) failed.</p>
+                            <p><a href="${BUILD_URL}console">View Console Output</a></p>
+                        """
+                    )
+                } catch (emailEx) {
+                    echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                }
+            }
+        }
+
+        always {
+            echo "RC Pipeline done | Build: #${BUILD_NUMBER} | Tag: ${IMAGE_TAG} | Node: ${NODE_NAME}"
+        }
+    }
+}

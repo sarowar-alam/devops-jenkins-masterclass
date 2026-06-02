@@ -1,0 +1,155 @@
+// ============================================================
+// BMI Health Tracker — Pipeline: WINDOWS AGENT (SL#4)
+// Runs on the Windows Server agent node
+// Job name:  bmi-pipeline-windows
+// Agent:     windows-agent (label must match node configuration)
+// Repo:      https://github.com/sarowar-alam/devops-jenkins-masterclass
+// Note:      Uses 'bat' steps (cmd.exe) — NOT 'sh'
+//            Variables use %VAR% syntax in bat blocks
+// ============================================================
+
+pipeline {
+    agent { label 'windows-agent' }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 10, unit: 'MINUTES')
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Repository checked out on WINDOWS AGENT — Build #${BUILD_NUMBER}"
+            }
+        }
+
+        stage('Verify Environment') {
+            steps {
+                // bat uses cmd.exe — use %VARIABLE% for env vars, not $VARIABLE
+                bat '''
+                    echo ============================================================
+                    echo   Running on : WINDOWS AGENT (Windows Server)
+                    echo ============================================================
+                    echo   Hostname      :
+                    echo %COMPUTERNAME%
+                    echo   OS Version    :
+                    ver
+                    echo   User Account  :
+                    echo %USERNAME%
+                    echo   User Domain   :
+                    echo %USERDOMAIN%
+                    echo   Java Version  :
+                    java -version
+                    echo   Git Version   :
+                    git --version
+                    echo   Node.js       :
+                    node --version 2>NUL || echo not installed
+                    echo   npm           :
+                    npm --version 2>NUL || echo not installed
+                    echo   Workspace     :
+                    echo %WORKSPACE%
+                    echo   Build Number  :
+                    echo %BUILD_NUMBER%
+                    echo   Branch        :
+                    echo %GIT_BRANCH%
+                    echo   Commit SHA    :
+                    echo %GIT_COMMIT%
+                    echo ============================================================
+                '''
+            }
+        }
+
+        stage('List Files') {
+            steps {
+                bat '''
+                    echo --- Repository Root ---
+                    dir /B
+
+                    echo.
+                    echo --- backend\\ ---
+                    IF EXIST backend (
+                        dir /B backend
+                    ) ELSE (
+                        echo [WARN] backend\\ not found
+                    )
+
+                    echo.
+                    echo --- backend\\src\\ ---
+                    IF EXIST backend\\src (
+                        dir /B backend\\src
+                    ) ELSE (
+                        echo [WARN] backend\\src\\ not found
+                    )
+
+                    echo.
+                    echo --- frontend\\ ---
+                    IF EXIST frontend (
+                        dir /B frontend
+                    ) ELSE (
+                        echo [WARN] frontend\\ not found
+                    )
+
+                    echo.
+                    echo --- database\\ ---
+                    IF EXIST database (
+                        dir /B database
+                    ) ELSE (
+                        echo [WARN] database\\ not found
+                    )
+
+                    echo.
+                    echo --- jenkins\\ (Jenkinsfiles) ---
+                    IF EXIST jenkins (
+                        dir /B jenkins
+                    ) ELSE (
+                        echo [WARN] jenkins\\ not found
+                    )
+
+                    echo.
+                    echo --- Recent Git Log ---
+                    git log --oneline -5
+                '''
+            }
+        }
+
+        stage('Build Report') {
+            steps {
+                bat '''
+                    echo.
+                    echo =========================================================
+                    echo   BUILD REPORT - WINDOWS AGENT
+                    echo =========================================================
+                    echo   Job Name    : %JOB_NAME%
+                    echo   Build ^#     : %BUILD_NUMBER%
+                    echo   Node Name   : %NODE_NAME%
+                    echo   Executor ^# : %EXECUTOR_NUMBER%
+                    echo   Workspace   : %WORKSPACE%
+                    echo   Build URL   : %BUILD_URL%
+                    echo   Git Branch  : %GIT_BRANCH%
+                    echo   Git Commit  : %GIT_COMMIT%
+                    echo   Platform    : Windows Server (x64)
+                    echo   Executed by : windows-agent node
+                    echo =========================================================
+                    echo.
+                '''
+            }
+        }
+
+    }
+
+    post {
+        success {
+            // In post blocks, Groovy string interpolation works with ${}
+            echo "[SUCCESS] Windows agent pipeline completed — Build #${BUILD_NUMBER} on node: ${NODE_NAME}"
+        }
+        failure {
+            echo "[FAILURE] Windows agent pipeline failed — Build #${BUILD_NUMBER} — review console output above"
+        }
+        always {
+            echo "[ALWAYS] Pipeline finished | Node: ${NODE_NAME} | Build: #${BUILD_NUMBER} | Branch: ${GIT_BRANCH}"
+        }
+    }
+}
