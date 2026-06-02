@@ -25,23 +25,12 @@ $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";"
 
 Write-Host "--- Chocolatey installed ---"
 
-# ── 2. Install Java 21, Jenkins, Git, AWS CLI ────────────────────────────────
-# Jenkins LTS 2.492+ requires Java 21. temurin21 installs to
-# C:\Program Files\Eclipse Adoptium\jdk-21.*
+# ── 2. Install Java 21 FIRST, set JAVA_HOME, then install Jenkins ─────────────
+# CRITICAL ORDER: JAVA_HOME must be set before Jenkins MSI runs,
+# otherwise the Jenkins service registration fails (error 1060).
 choco install -y --no-progress temurin21
-choco install -y --no-progress jenkins
-choco install -y --no-progress git
-choco install -y --no-progress awscli
 
-# Refresh PATH after package installs
-$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + `
-            [System.Environment]::GetEnvironmentVariable("Path","User")
-
-Write-Host "--- Packages installed ---"
-
-# ── 2b. Set JAVA_HOME at system level so Jenkins service can find Java ────────
-# choco auto-starts Jenkins immediately after install — before JAVA_HOME is set.
-# We stop the service, set JAVA_HOME at Machine scope, then restart cleanly.
+# Set JAVA_HOME immediately after Java install, before Jenkins MSI runs
 $jdkDir = Get-ChildItem "C:\Program Files\Eclipse Adoptium" -Directory `
   -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*21*' } `
   | Sort-Object Name -Descending | Select-Object -First 1
@@ -56,8 +45,34 @@ if ($jdkDir) {
   $env:Path = "$javaHome\bin;$env:Path"
   Write-Host "--- JAVA_HOME set to: $javaHome ---"
 } else {
-  Write-Host "WARNING: Could not locate temurin21 JDK directory — Jenkins may fail to start"
+  Write-Host "ERROR: Could not locate temurin21 JDK — aborting"
   Get-ChildItem "C:\Program Files\Eclipse Adoptium" -ErrorAction SilentlyContinue | Select-Object Name
+  Stop-Transcript; exit 1
+}
+
+# Now install Jenkins (MSI will find Java via JAVA_HOME + PATH)
+choco install -y --no-progress jenkins
+choco install -y --no-progress git
+choco install -y --no-progress awscli
+
+# Refresh PATH in current session after all installs
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + `
+            [System.Environment]::GetEnvironmentVariable("Path","User")
+
+Write-Host "--- Packages installed ---"
+
+# ── 2b. Patch jenkins.xml to use explicit Java path (belt + suspenders) ───────
+# Even if JAVA_HOME env var is not inherited by the service, the explicit path works.
+$jenkinsXml = "C:\Program Files\Jenkins\jenkins.xml"
+if (Test-Path $jenkinsXml) {
+  $xmlContent = Get-Content $jenkinsXml -Raw
+  $javaExe = "$javaHome\bin\java.exe" -replace '\\', '\\'
+  # Replace any existing <executable> line with our explicit java path
+  $xmlContent = $xmlContent -replace '<executable>[^<]*</executable>', "<executable>$javaHome\bin\java.exe</executable>"
+  Set-Content $jenkinsXml $xmlContent -Encoding UTF8
+  Write-Host "--- jenkins.xml patched with explicit java path ---"
+} else {
+  Write-Host "WARNING: jenkins.xml not found at expected path"
 }
 
 # ── 3. Firewall rules ────────────────────────────────────────────────────────
