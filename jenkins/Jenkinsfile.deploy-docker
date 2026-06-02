@@ -364,24 +364,35 @@ REMOTE_SCRIPT
 
                 try {
                     emailext(
+                        from: 'Jenkins CI <sarowar.alam@gmail.com>',
                         to: params.NOTIFY_EMAIL,
-                        subject: "[DEPLOY SUCCESS] BMI Health Tracker — ${env.IMAGE_TAG} live on ${params.EC2_HOST}",
+                        subject: "[DEPLOY SUCCESS] BMI Health Tracker - ${env.IMAGE_TAG} live on ${params.EC2_HOST}",
                         mimeType: 'text/html',
                         body: """
-                            <h2 style="color:green">&#10004; Docker Deployment Successful</h2>
-                            <table border="1" cellpadding="6" cellspacing="0">
-                                <tr><td><b>RC Build #</b></td><td>${params.RC_BUILD_NUMBER}</td></tr>
-                                <tr><td><b>Image Tag</b></td><td>${env.IMAGE_TAG}</td></tr>
-                                <tr><td><b>Git Commit</b></td><td>${env.GIT_COMMIT_SHA}</td></tr>
-                                <tr><td><b>Built at</b></td><td>${env.RC_TIMESTAMP}</td></tr>
-                                <tr><td><b>Target</b></td><td>${params.EC2_USER}@${params.EC2_HOST}</td></tr>
-                                <tr><td><b>Frontend Image</b></td><td>${env.FRONTEND_IMAGE}</td></tr>
-                                <tr><td><b>Backend Image</b></td><td>${env.BACKEND_IMAGE}</td></tr>
-                                <tr><td><b>App URL</b></td><td><a href="http://${params.EC2_HOST}">http://${params.EC2_HOST}</a></td></tr>
-                                <tr><td><b>API URL</b></td><td><a href="http://${params.EC2_HOST}/api/measurements">http://${params.EC2_HOST}/api/measurements</a></td></tr>
-                                <tr><td><b>Console</b></td><td><a href="${BUILD_URL}console">${BUILD_URL}console</a></td></tr>
-                                <tr><td><b>Rollback</b></td><td>Re-run bmi-deploy-docker with an older RC_BUILD_NUMBER</td></tr>
+                            <html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f5f5f5;">
+                            <table width="600" cellpadding="0" cellspacing="0" style="margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+                              <tr><td style="background:#1a6fa8;padding:20px 24px;">
+                                <h2 style="margin:0;color:#fff;">&#10004; Docker Deployment Successful</h2>
+                                <p style="margin:4px 0 0;color:#c8e8ff;font-size:13px;">BMI Health Tracker &mdash; ${env.IMAGE_TAG}</p>
+                              </td></tr>
+                              <tr><td style="padding:24px;">
+                                <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:14px;">
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;width:140px;"><b>RC Build #</b></td><td style="border:1px solid #ddd;">${params.RC_BUILD_NUMBER}</td></tr>
+                                  <tr><td style="border:1px solid #ddd;"><b>Image Tag</b></td><td style="border:1px solid #ddd;">${env.IMAGE_TAG}</td></tr>
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Git Commit</b></td><td style="border:1px solid #ddd;">${env.GIT_COMMIT_SHA}</td></tr>
+                                  <tr><td style="border:1px solid #ddd;"><b>Built At</b></td><td style="border:1px solid #ddd;">${env.RC_TIMESTAMP}</td></tr>
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Target</b></td><td style="border:1px solid #ddd;">${params.EC2_USER}@${params.EC2_HOST}</td></tr>
+                                  <tr><td style="border:1px solid #ddd;"><b>Frontend Image</b></td><td style="border:1px solid #ddd;">${env.FRONTEND_IMAGE}</td></tr>
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Backend Image</b></td><td style="border:1px solid #ddd;">${env.BACKEND_IMAGE}</td></tr>
+                                  <tr><td style="border:1px solid #ddd;"><b>App URL</b></td><td style="border:1px solid #ddd;"><a href="http://${params.EC2_HOST}" style="color:#1a73e8;">http://${params.EC2_HOST}</a></td></tr>
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>API URL</b></td><td style="border:1px solid #ddd;"><a href="http://${params.EC2_HOST}/api/measurements" style="color:#1a73e8;">http://${params.EC2_HOST}/api/measurements</a></td></tr>
+                                  <tr><td style="border:1px solid #ddd;"><b>Console</b></td><td style="border:1px solid #ddd;"><a href="${BUILD_URL}console" style="color:#1a73e8;">View Console Output</a></td></tr>
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Rollback</b></td><td style="border:1px solid #ddd;">Re-run bmi-deploy-docker with an older RC_BUILD_NUMBER</td></tr>
+                                </table>
+                              </td></tr>
+                              <tr><td style="padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;">Sent by Jenkins CI via AWS SES &bull; ap-south-1</td></tr>
                             </table>
+                            </body></html>
                         """
                     )
                     echo "Email notification sent to: ${params.NOTIFY_EMAIL}"
@@ -397,13 +408,29 @@ REMOTE_SCRIPT
 
                 try {
                     emailext(
+                        from: 'Jenkins CI <sarowar.alam@gmail.com>',
                         to: params.NOTIFY_EMAIL,
-                        subject: "[DEPLOY FAILED] BMI Health Tracker — RC #${params.RC_BUILD_NUMBER} failed on ${params.EC2_HOST}",
+                        subject: "[DEPLOY FAILED] BMI Health Tracker - RC #${params.RC_BUILD_NUMBER} failed on ${params.EC2_HOST}",
                         mimeType: 'text/html',
                         body: """
-                            <h2 style="color:red">&#10008; Docker Deployment Failed</h2>
-                            <p>Deployment of RC #${params.RC_BUILD_NUMBER} (${env.IMAGE_TAG ?: 'unknown'}) failed on <b>${params.EC2_HOST}</b>.</p>
-                            <p><a href="${BUILD_URL}console">View Console Output</a></p>
+                            <html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f5f5f5;">
+                            <table width="600" cellpadding="0" cellspacing="0" style="margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+                              <tr><td style="background:#c0392b;padding:20px 24px;">
+                                <h2 style="margin:0;color:#fff;">&#10008; Docker Deployment Failed</h2>
+                                <p style="margin:4px 0 0;color:#ffc8c8;font-size:13px;">BMI Health Tracker &mdash; RC #${params.RC_BUILD_NUMBER}</p>
+                              </td></tr>
+                              <tr><td style="padding:24px;">
+                                <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:14px;">
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;width:140px;"><b>RC Build #</b></td><td style="border:1px solid #ddd;">${params.RC_BUILD_NUMBER}</td></tr>
+                                  <tr><td style="border:1px solid #ddd;"><b>Image Tag</b></td><td style="border:1px solid #ddd;">${env.IMAGE_TAG ?: 'unknown'}</td></tr>
+                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Target</b></td><td style="border:1px solid #ddd;">${params.EC2_HOST}</td></tr>
+                                  <tr><td style="border:1px solid #ddd;"><b>Console</b></td><td style="border:1px solid #ddd;"><a href="${BUILD_URL}console" style="color:#1a73e8;">View Console Output</a></td></tr>
+                                </table>
+                                <p style="font-size:13px;color:#555;margin-top:16px;">Review the console output for full error details.</p>
+                              </td></tr>
+                              <tr><td style="padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;">Sent by Jenkins CI via AWS SES &bull; ap-south-1</td></tr>
+                            </table>
+                            </body></html>
                         """
                     )
                 } catch (emailEx) {

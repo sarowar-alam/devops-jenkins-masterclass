@@ -304,19 +304,27 @@ pipeline {
                     try {
                         def subject = "Jenkins | Terraform ${params.ACTION.capitalize()} | ${params.ENVIRONMENT} | SUCCESS"
                         def body = """
-<html><body style="font-family: Arial, sans-serif;">
-<h2 style="color: #2c7a2c;">Terraform ${params.ACTION.capitalize()} — SUCCESS</h2>
-<table style="border-collapse:collapse; width:100%;">
-  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Action</b></td><td style="padding:6px; border:1px solid #ddd;">${params.ACTION.toUpperCase()}</td></tr>
-  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Environment</b></td><td style="padding:6px; border:1px solid #ddd;">${params.ENVIRONMENT}</td></tr>
-  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Region</b></td><td style="padding:6px; border:1px solid #ddd;">${params.AWS_REGION}</td></tr>
-  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Build</b></td><td style="padding:6px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
-  <tr><td style="padding:6px; border:1px solid #ddd;"><b>Console</b></td><td style="padding:6px; border:1px solid #ddd;"><a href="${env.BUILD_URL}">View Build</a></td></tr>
+<html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f5f5f5;">
+<table width="600" cellpadding="0" cellspacing="0" style="margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+  <tr><td style="background:#2c7a2c;padding:20px 24px;">
+    <h2 style="margin:0;color:#fff;">&#10004; Terraform ${params.ACTION.capitalize()} Successful</h2>
+    <p style="margin:4px 0 0;color:#c8ffc8;font-size:13px;">Environment: ${params.ENVIRONMENT} &mdash; Build #${env.BUILD_NUMBER}</p>
+  </td></tr>
+  <tr><td style="padding:24px;">
+    <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:14px;">
+      <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;width:130px;"><b>Action</b></td><td style="border:1px solid #ddd;">${params.ACTION.toUpperCase()}</td></tr>
+      <tr><td style="border:1px solid #ddd;"><b>Environment</b></td><td style="border:1px solid #ddd;">${params.ENVIRONMENT}</td></tr>
+      <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Region</b></td><td style="border:1px solid #ddd;">${params.AWS_REGION}</td></tr>
+      <tr><td style="border:1px solid #ddd;"><b>Build #</b></td><td style="border:1px solid #ddd;">${env.BUILD_NUMBER}</td></tr>
+      <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Console</b></td><td style="border:1px solid #ddd;"><a href="${env.BUILD_URL}" style="color:#1a73e8;">View Build</a></td></tr>
+    </table>
+    <p style="font-size:13px;color:#555;margin-top:16px;">Download the <b>terraform-outputs.txt</b> artifact for EC2 instance IDs and SSM connect commands.</p>
+  </td></tr>
+  <tr><td style="padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;">Sent by Jenkins CI via AWS SES &bull; ap-south-1</td></tr>
 </table>
-<p>Download <b>terraform-outputs.txt</b> artifact for EC2 instance ID and SSM connect command.</p>
 </body></html>
 """
-                        emailext(subject: subject, body: body, to: params.NOTIFY_EMAIL, mimeType: 'text/html')
+                        emailext(subject: subject, body: body, from: 'Jenkins CI <sarowar.alam@gmail.com>', to: params.NOTIFY_EMAIL, mimeType: 'text/html')
                     } catch (emailError) {
                         echo "[WARN] Email notification failed — check SES SMTP config: ${emailError.getMessage()}"
                     }
@@ -331,10 +339,31 @@ pipeline {
                 if (params.NOTIFY_EMAIL?.trim()) {
                     try {
                         emailext(
-                            subject:  "Jenkins | Terraform ${params.ACTION.capitalize()} | ${params.ENVIRONMENT} | FAILED",
-                            body:     "Terraform ${params.ACTION} FAILED for environment '${params.ENVIRONMENT}' in ${params.AWS_REGION}.\n\nBuild: #${env.BUILD_NUMBER}\nConsole: ${env.BUILD_URL}console",
+                            from:     'Jenkins CI <sarowar.alam@gmail.com>',
                             to:       params.NOTIFY_EMAIL,
-                            mimeType: 'text/plain'
+                            subject:  "[FAILED] Terraform ${params.ACTION.capitalize()} | ${params.ENVIRONMENT} | ${params.AWS_REGION}",
+                            mimeType: 'text/html',
+                            body:     """
+<html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f5f5f5;">
+<table width="600" cellpadding="0" cellspacing="0" style="margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+  <tr><td style="background:#c0392b;padding:20px 24px;">
+    <h2 style="margin:0;color:#fff;">&#10008; Terraform ${params.ACTION.capitalize()} Failed</h2>
+    <p style="margin:4px 0 0;color:#ffc8c8;font-size:13px;">Environment: ${params.ENVIRONMENT} &mdash; Build #${env.BUILD_NUMBER}</p>
+  </td></tr>
+  <tr><td style="padding:24px;">
+    <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:14px;">
+      <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;width:130px;"><b>Action</b></td><td style="border:1px solid #ddd;">${params.ACTION.toUpperCase()}</td></tr>
+      <tr><td style="border:1px solid #ddd;"><b>Environment</b></td><td style="border:1px solid #ddd;">${params.ENVIRONMENT}</td></tr>
+      <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Region</b></td><td style="border:1px solid #ddd;">${params.AWS_REGION}</td></tr>
+      <tr><td style="border:1px solid #ddd;"><b>Build #</b></td><td style="border:1px solid #ddd;">${env.BUILD_NUMBER}</td></tr>
+      <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Console</b></td><td style="border:1px solid #ddd;"><a href="${env.BUILD_URL}console" style="color:#1a73e8;">View Console Output</a></td></tr>
+    </table>
+    <p style="font-size:13px;color:#555;margin-top:16px;">Review the console output for full Terraform error details.</p>
+  </td></tr>
+  <tr><td style="padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;">Sent by Jenkins CI via AWS SES &bull; ap-south-1</td></tr>
+</table>
+</body></html>
+"""
                         )
                     } catch (emailError) {
                         echo "[WARN] Email notification failed — check SES SMTP config: ${emailError.getMessage()}"
