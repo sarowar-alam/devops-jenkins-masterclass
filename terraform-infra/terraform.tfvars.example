@@ -1,0 +1,28 @@
+# Copy this file to terraform.tfvars and fill in your values.
+# Run: cp terraform.tfvars.example terraform.tfvars
+
+# ── Authentication ─────────────────────────────────────────────────────────────
+aws_profile = "sarowar-ostad"
+aws_region  = "ap-south-1"
+
+# ── Placement ──────────────────────────────────────────────────────────────────
+availability_zone_suffix = "a"
+project_name             = "jenkins-infra"
+environment              = "dev"
+
+# ── REQUIRED — your public IP for SSH and RDP access ─────────────────────────
+# Find your IP:  curl -s ifconfig.me
+admin_cidr = "YOUR_IP_ADDRESS/32"
+
+# ── Key Pair ───────────────────────────────────────────────────────────────────
+key_pair_name = "sarowar-ostad-mumbai"
+
+# ── Instance Types ─────────────────────────────────────────────────────────────
+master_linux_instance_type   = "t3.medium"
+master_windows_instance_type = "t3.large"
+agent_linux_instance_type    = "t3.small"
+agent_windows_instance_type  = "t3.medium"
+
+# ── Storage ────────────────────────────────────────────────────────────────────
+linux_root_volume_size   = 30
+windows_root_volume_size = 50

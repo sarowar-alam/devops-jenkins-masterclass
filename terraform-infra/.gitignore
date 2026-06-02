@@ -1,0 +1,23 @@
+# Terraform working directory — contains downloaded providers and modules
+.terraform/
+
+# Lock file is safe to commit (pins provider versions)
+# .terraform.lock.hcl  ← intentionally NOT ignored
+
+# Plan files (may contain sensitive data)
+*.tfplan
+*.tfstate
+*.tfstate.backup
+
+# Variable files with real values (example file is committed)
+terraform.tfvars
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files (local developer overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
