@@ -62,10 +62,10 @@ This application is the hands-on vehicle for a 7-session Jenkins course covering
 ┌───────────────────────▼────────────────────────────────┐
 │  Tier 2 — Application / API                            │
 │  Node.js 20 + Express — port 3000 (internal only)      │
-│  REST endpoints: POST /api/measurements                 │
-│                  GET  /api/measurements                 │
-│                  GET  /api/measurements/trends          │
-│                  GET  /health                           │
+│  REST endpoints: POST /api/measurements                │
+│                  GET  /api/measurements                │
+│                  GET  /api/measurements/trends         │
+│                  GET  /health                          │
 └───────────────────────┬────────────────────────────────┘
                         │ pg driver (TCP/5432)
 ┌───────────────────────▼────────────────────────────────┐
