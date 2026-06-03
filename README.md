@@ -27,7 +27,6 @@ A full-stack **BMI & Health Tracking** web application built as a practical proj
 19. [Troubleshooting](#19-troubleshooting)
 20. [Future Improvements](#20-future-improvements)
 21. [Contributing](#21-contributing)
-22. [License](#22-license)
 
 ---
 
@@ -893,14 +892,6 @@ docker logs bmi-backend --tail 20
 
 ---
 
-## 22. License
-
-This project is created for educational purposes as part of the **Mastering DevOps — Jenkins for DevOps Engineers** course at [Ostad](https://ostad.app).
-
-The source code is provided for learning and reference. All AWS infrastructure is provisioned under your own account and subject to AWS pricing. Run `terraform destroy` when not in use to avoid charges.
-
----
-
 *Last updated: June 2026 — Jenkins LTS 2.555.2 · Java 21 (Eclipse Temurin) · Jenkins signing key: jenkins.io-2026.key*
 
 ---
@@ -909,6 +900,7 @@ The source code is provided for learning and reference. All AWS infrastructure i
 
 **MD Sarowar Alam**
 Lead DevOps Engineer, WPP Production
+
 📧 Email: [sarowar@hotmail.com](mailto:sarowar@hotmail.com)
 🔗 LinkedIn: https://www.linkedin.com/in/sarowar/
 
