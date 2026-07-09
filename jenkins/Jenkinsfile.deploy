@@ -365,6 +365,14 @@ NGINXEOF
                             sudo cp -r ${APP_DIR}/frontend/dist/* ${WEBROOT}/
                             sudo chown -R www-data:www-data ${WEBROOT}
 
+                            echo "=== [UPDATE] Applying migrations ==="
+                            cp ${APP_DIR}/backend/migrations/001_create_measurements.sql /tmp/
+                            cp ${APP_DIR}/backend/migrations/002_add_measurement_date.sql /tmp/
+                            sudo -u postgres psql -d bmidb -f /tmp/001_create_measurements.sql
+                            sudo -u postgres psql -d bmidb -f /tmp/002_add_measurement_date.sql
+                            rm -f /tmp/001_create_measurements.sql /tmp/002_add_measurement_date.sql
+                            echo "Migrations applied"
+
                             echo "=== [UPDATE] Restarting backend ==="
                             pm2 restart bmi-backend
                             echo "PM2 restart: bmi-backend done"
