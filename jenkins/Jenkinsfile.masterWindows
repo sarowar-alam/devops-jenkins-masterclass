@@ -1,0 +1,131 @@
+// ============================================================
+// BMI Health Tracker — Pipeline: WINDOWS MASTER NODE (SL#4)
+// Runs on the Jenkins Controller (built-in node) on Windows Server
+// Job name:  bmi-pipeline-master-windows
+// Repo:      https://github.com/sarowar-alam/devops-jenkins-masterclass
+// Note:      Uses 'powershell' steps — NOT 'sh' or 'bat'
+//            Jenkins env vars use ${VAR} in Groovy strings
+//            PowerShell env vars use $env:VAR inside powershell blocks
+// ============================================================
+
+pipeline {
+    agent { label 'built-in' }
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 10, unit: 'MINUTES')
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo "Repository checked out on WINDOWS MASTER node — Build #${BUILD_NUMBER}"
+            }
+        }
+
+        stage('Verify Environment') {
+            steps {
+                powershell '''
+                    Write-Host "============================================================"
+                    Write-Host "  Running on : WINDOWS MASTER (built-in controller node)"
+                    Write-Host "============================================================"
+
+                    Write-Host "  Hostname     : $env:COMPUTERNAME"
+
+                    $os = (Get-CimInstance Win32_OperatingSystem).Caption
+                    Write-Host "  OS           : $os"
+
+                    $arch = $env:PROCESSOR_ARCHITECTURE
+                    Write-Host "  Architecture : $arch"
+
+                    Write-Host "  User         : $env:USERNAME @ $env:USERDOMAIN"
+
+                    $javaVer = (java -version 2>&1 | Select-String -Pattern "version") -replace ".*version ",""
+                    Write-Host "  Java Version : $javaVer"
+
+                    $nodeVer = (node --version 2>$null)
+                    Write-Host "  Node.js      : $(if ($nodeVer) { $nodeVer } else { 'not installed' })"
+
+                    $npmVer = (npm --version 2>$null)
+                    Write-Host "  npm          : $(if ($npmVer) { $npmVer } else { 'not installed' })"
+
+                    $gitVer = (git --version 2>$null)
+                    Write-Host "  Git          : $(if ($gitVer) { $gitVer } else { 'not installed' })"
+
+                    Write-Host "  Workspace    : $env:WORKSPACE"
+                    Write-Host "  Build Number : $env:BUILD_NUMBER"
+                    Write-Host "  Branch       : $env:GIT_BRANCH"
+                    Write-Host "  Commit SHA   : $env:GIT_COMMIT"
+                    Write-Host "============================================================"
+                '''
+            }
+        }
+
+        stage('List Files') {
+            steps {
+                powershell '''
+                    function List-Dir($path, $label) {
+                        Write-Host ""
+                        Write-Host "--- $label ---"
+                        if (Test-Path $path) {
+                            Get-ChildItem -Path $path | Format-Table Name, LastWriteTime, Length -AutoSize
+                        } else {
+                            Write-Host "[WARN] $path not found"
+                        }
+                    }
+
+                    List-Dir "."                "$env:WORKSPACE (Repository Root)"
+                    List-Dir "backend"          "backend\\"
+                    List-Dir "backend\\src"     "backend\\src\\"
+                    List-Dir "frontend"         "frontend\\"
+                    List-Dir "database"         "database\\"
+                    List-Dir "jenkins"          "jenkins\\ (Jenkinsfiles)"
+
+                    Write-Host ""
+                    Write-Host "--- Recent Git Log ---"
+                    git log --oneline -5
+                '''
+            }
+        }
+
+        stage('Build Report') {
+            steps {
+                powershell '''
+                    $sep = "=" * 56
+                    Write-Host ""
+                    Write-Host $sep
+                    Write-Host "  BUILD REPORT - WINDOWS MASTER NODE"
+                    Write-Host $sep
+                    Write-Host "  Job Name    : $env:JOB_NAME"
+                    Write-Host "  Build #     : $env:BUILD_NUMBER"
+                    Write-Host "  Node Name   : $env:NODE_NAME"
+                    Write-Host "  Executor #  : $env:EXECUTOR_NUMBER"
+                    Write-Host "  Workspace   : $env:WORKSPACE"
+                    Write-Host "  Build URL   : $env:BUILD_URL"
+                    Write-Host "  Git Branch  : $env:GIT_BRANCH"
+                    Write-Host "  Git Commit  : $env:GIT_COMMIT"
+                    Write-Host "  Platform    : Windows Server (x64)"
+                    Write-Host "  Executed by : WINDOWS MASTER / Built-in Controller Node"
+                    Write-Host $sep
+                    Write-Host ""
+                '''
+            }
+        }
+
+    }
+
+    post {
+        success {
+            echo "[SUCCESS] Windows master pipeline completed — Build #${BUILD_NUMBER} on node: ${NODE_NAME}"
+        }
+        failure {
+            echo "[FAILURE] Windows master pipeline failed — Build #${BUILD_NUMBER} — review console output above"
+        }
+        always {
+            echo "[ALWAYS] Pipeline finished | Node: ${NODE_NAME} | Build: #${BUILD_NUMBER} | Branch: ${GIT_BRANCH}"
+        }
+    }
+}
