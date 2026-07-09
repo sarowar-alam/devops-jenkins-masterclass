@@ -45,14 +45,20 @@ pipeline {
             defaultValue: '',
             description: 'Email address for deployment notifications (required)'
         )
+        string(
+            name: 'FROM_EMAIL',
+            defaultValue: 'sarowar@hotmail.com',
+            description: 'SES verified sender email address'
+        )
     }
 
     environment {
-        APP_DIR    = '/home/ubuntu/bmi-health-tracker'
-        BACKUP_DIR = '/home/ubuntu/backups'
-        WEBROOT    = '/var/www/bmi-health-tracker'
-        GIT_REPO   = 'https://github.com/sarowar-alam/devops-jenkins-masterclass.git'
-        MARKER     = '/home/ubuntu/bmi-health-tracker/.deployed'
+        APP_DIR        = '/home/ubuntu/bmi-health-tracker'
+        BACKUP_DIR     = '/home/ubuntu/backups'
+        WEBROOT        = '/var/www/bmi-health-tracker'
+        GIT_REPO       = 'https://github.com/sarowar-alam/devops-jenkins-masterclass.git'
+        MARKER         = '/home/ubuntu/bmi-health-tracker/.deployed'
+        AWS_SES_REGION = 'ap-south-1'
     }
 
     stages {
@@ -457,37 +463,20 @@ NGINXEOF
                 echo "============================================================"
 
                 try {
-                    emailext(
-                        from: 'Jenkins CI <sarowar.alam@gmail.com>',
-                        to: params.NOTIFY_EMAIL,
-                        subject: "[SUCCESS] BMI Health Tracker Deployed - Build #${BUILD_NUMBER}",
-                        mimeType: 'text/html',
-                        body: """
-                            <html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f5f5f5;">
-                            <table width="600" cellpadding="0" cellspacing="0" style="margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-                              <tr><td style="background:#2c7a2c;padding:20px 24px;">
-                                <h2 style="margin:0;color:#fff;">&#10004; Deployment Successful</h2>
-                                <p style="margin:4px 0 0;color:#c8ffc8;font-size:13px;">BMI Health Tracker &mdash; Build #${BUILD_NUMBER}</p>
-                              </td></tr>
-                              <tr><td style="padding:24px;">
-                                <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:14px;">
-                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;width:130px;"><b>Job</b></td><td style="border:1px solid #ddd;">${JOB_NAME}</td></tr>
-                                  <tr><td style="border:1px solid #ddd;"><b>Build #</b></td><td style="border:1px solid #ddd;">${BUILD_NUMBER}</td></tr>
-                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Deploy Mode</b></td><td style="border:1px solid #ddd;">${env.DEPLOY_MODE}</td></tr>
-                                  <tr><td style="border:1px solid #ddd;"><b>Target</b></td><td style="border:1px solid #ddd;">${params.EC2_USER}@${params.EC2_HOST}</td></tr>
-                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>App URL</b></td><td style="border:1px solid #ddd;"><a href="http://${params.EC2_HOST}" style="color:#1a73e8;">http://${params.EC2_HOST}</a></td></tr>
-                                  <tr><td style="border:1px solid #ddd;"><b>API URL</b></td><td style="border:1px solid #ddd;"><a href="http://${params.EC2_HOST}/api/measurements" style="color:#1a73e8;">http://${params.EC2_HOST}/api/measurements</a></td></tr>
-                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Console</b></td><td style="border:1px solid #ddd;"><a href="${BUILD_URL}console" style="color:#1a73e8;">View Console Output</a></td></tr>
-                                </table>
-                              </td></tr>
-                              <tr><td style="padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;">Sent by Jenkins CI via AWS SES &bull; ap-south-1</td></tr>
-                            </table>
-                            </body></html>
-                        """
-                    )
+                    sh """
+                        cat > /tmp/bmi_ses_msg.json << 'SESEOF'
+{"Subject":{"Data":"[SUCCESS] BMI Health Tracker Deployed - Build #${BUILD_NUMBER}","Charset":"UTF-8"},"Body":{"Html":{"Data":"<html><body style='font-family:Arial,sans-serif;background:#f5f5f5;'><table width='600' cellpadding='0' cellspacing='0' style='margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);'><tr><td style='background:#2c7a2c;padding:20px 24px;'><h2 style='margin:0;color:#fff;'>&#10004; Deployment Successful</h2><p style='margin:4px 0 0;color:#c8ffc8;font-size:13px;'>BMI Health Tracker &mdash; Build #${BUILD_NUMBER}</p></td></tr><tr><td style='padding:24px;'><table width='100%' cellpadding='6' cellspacing='0' style='border-collapse:collapse;font-size:14px;'><tr style='background:#f9f9f9;'><td style='border:1px solid #ddd;width:130px;'><b>Job</b></td><td style='border:1px solid #ddd;'>${JOB_NAME}</td></tr><tr><td style='border:1px solid #ddd;'><b>Build</b></td><td style='border:1px solid #ddd;'>#${BUILD_NUMBER}</td></tr><tr style='background:#f9f9f9;'><td style='border:1px solid #ddd;'><b>Mode</b></td><td style='border:1px solid #ddd;'>${env.DEPLOY_MODE}</td></tr><tr><td style='border:1px solid #ddd;'><b>Target</b></td><td style='border:1px solid #ddd;'>${params.EC2_HOST}</td></tr><tr style='background:#f9f9f9;'><td style='border:1px solid #ddd;'><b>App URL</b></td><td style='border:1px solid #ddd;'><a href='http://${params.EC2_HOST}' style='color:#1a73e8;'>http://${params.EC2_HOST}</a></td></tr><tr><td style='border:1px solid #ddd;'><b>Console</b></td><td style='border:1px solid #ddd;'><a href='${BUILD_URL}console' style='color:#1a73e8;'>View Console Output</a></td></tr></table></td></tr><tr><td style='padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;'>Jenkins CI via AWS SES (IAM Role) &bull; ${AWS_SES_REGION}</td></tr></table></body></html>","Charset":"UTF-8"}}}
+SESEOF
+                        aws ses send-email \\
+                            --from "${params.FROM_EMAIL}" \\
+                            --destination "ToAddresses=${params.NOTIFY_EMAIL}" \\
+                            --message file:///tmp/bmi_ses_msg.json \\
+                            --region "${AWS_SES_REGION}"
+                        rm -f /tmp/bmi_ses_msg.json
+                    """
                     echo "Email notification sent to: ${params.NOTIFY_EMAIL}"
-                } catch (emailEx) {
-                    echo "[WARN] Email notification failed - check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                } catch (sesEx) {
+                    echo "[WARN] SES email failed — ensure IAM role has ses:SendEmail and FROM_EMAIL is verified in SES. Error: ${sesEx.message}"
                 }
             }
         }
@@ -497,35 +486,20 @@ NGINXEOF
                 echo "[FAILURE] Deployment failed — Build #${BUILD_NUMBER} — review console output above"
 
                 try {
-                    emailext(
-                        from: 'Jenkins CI <sarowar.alam@gmail.com>',
-                        to: params.NOTIFY_EMAIL,
-                        subject: "[FAILED] BMI Health Tracker Deployment Failed - Build #${BUILD_NUMBER}",
-                        mimeType: 'text/html',
-                        body: """
-                            <html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f5f5f5;">
-                            <table width="600" cellpadding="0" cellspacing="0" style="margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-                              <tr><td style="background:#c0392b;padding:20px 24px;">
-                                <h2 style="margin:0;color:#fff;">&#10008; Deployment Failed</h2>
-                                <p style="margin:4px 0 0;color:#ffc8c8;font-size:13px;">BMI Health Tracker &mdash; Build #${BUILD_NUMBER}</p>
-                              </td></tr>
-                              <tr><td style="padding:24px;">
-                                <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-size:14px;">
-                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;width:130px;"><b>Job</b></td><td style="border:1px solid #ddd;">${JOB_NAME}</td></tr>
-                                  <tr><td style="border:1px solid #ddd;"><b>Build #</b></td><td style="border:1px solid #ddd;">${BUILD_NUMBER}</td></tr>
-                                  <tr style="background:#f9f9f9;"><td style="border:1px solid #ddd;"><b>Target</b></td><td style="border:1px solid #ddd;">${params.EC2_USER}@${params.EC2_HOST}</td></tr>
-                                  <tr><td style="border:1px solid #ddd;"><b>Console</b></td><td style="border:1px solid #ddd;"><a href="${BUILD_URL}console" style="color:#1a73e8;">View Console Output</a></td></tr>
-                                </table>
-                                <p style="font-size:13px;color:#555;margin-top:16px;">Review the console output for full error details.</p>
-                              </td></tr>
-                              <tr><td style="padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;">Sent by Jenkins CI via AWS SES &bull; ap-south-1</td></tr>
-                            </table>
-                            </body></html>
-                        """
-                    )
+                    sh """
+                        cat > /tmp/bmi_ses_msg.json << 'SESEOF'
+{"Subject":{"Data":"[FAILED] BMI Health Tracker Deployment Failed - Build #${BUILD_NUMBER}","Charset":"UTF-8"},"Body":{"Html":{"Data":"<html><body style='font-family:Arial,sans-serif;background:#f5f5f5;'><table width='600' cellpadding='0' cellspacing='0' style='margin:20px auto;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);'><tr><td style='background:#c0392b;padding:20px 24px;'><h2 style='margin:0;color:#fff;'>&#10008; Deployment Failed</h2><p style='margin:4px 0 0;color:#ffc8c8;font-size:13px;'>BMI Health Tracker &mdash; Build #${BUILD_NUMBER}</p></td></tr><tr><td style='padding:24px;'><table width='100%' cellpadding='6' cellspacing='0' style='border-collapse:collapse;font-size:14px;'><tr style='background:#f9f9f9;'><td style='border:1px solid #ddd;width:130px;'><b>Job</b></td><td style='border:1px solid #ddd;'>${JOB_NAME}</td></tr><tr><td style='border:1px solid #ddd;'><b>Build</b></td><td style='border:1px solid #ddd;'>#${BUILD_NUMBER}</td></tr><tr style='background:#f9f9f9;'><td style='border:1px solid #ddd;'><b>Target</b></td><td style='border:1px solid #ddd;'>${params.EC2_HOST}</td></tr><tr><td style='border:1px solid #ddd;'><b>Console</b></td><td style='border:1px solid #ddd;'><a href='${BUILD_URL}console' style='color:#1a73e8;'>View Console Output</a></td></tr></table><p style='font-size:13px;color:#555;margin-top:16px;'>Review the console output for full error details.</p></td></tr><tr><td style='padding:12px 24px;background:#f5f5f5;font-size:12px;color:#888;border-top:1px solid #eee;'>Jenkins CI via AWS SES (IAM Role) &bull; ${AWS_SES_REGION}</td></tr></table></body></html>","Charset":"UTF-8"}}}
+SESEOF
+                        aws ses send-email \\
+                            --from "${params.FROM_EMAIL}" \\
+                            --destination "ToAddresses=${params.NOTIFY_EMAIL}" \\
+                            --message file:///tmp/bmi_ses_msg.json \\
+                            --region "${AWS_SES_REGION}"
+                        rm -f /tmp/bmi_ses_msg.json
+                    """
                     echo "Failure notification sent to: ${params.NOTIFY_EMAIL}"
-                } catch (emailEx) {
-                    echo "[WARN] Email notification failed - check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
+                } catch (sesEx) {
+                    echo "[WARN] SES email failed — ensure IAM role has ses:SendEmail and FROM_EMAIL is verified in SES. Error: ${sesEx.message}"
                 }
             }
         }
