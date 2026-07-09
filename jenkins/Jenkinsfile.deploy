@@ -155,9 +155,17 @@ pipeline {
                                 # PM2 globally
                                 sudo npm install -g pm2
 
-                                # PostgreSQL 14
+                                # PostgreSQL 14 via official PGDG repo
+                                # (Ubuntu 24.04 default repos only ship PG16 — PGDG has PG14)
                                 if ! command -v psql &>/dev/null; then
-                                    echo "Installing PostgreSQL 14..."
+                                    echo "Installing PostgreSQL 14 via PGDG..."
+                                    sudo apt-get install -y gnupg2 wget
+                                    sudo install -d /usr/share/postgresql-common/pgdg
+                                    sudo wget -q -O /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+                                        https://www.postgresql.org/media/keys/ACCC4CF8.asc
+                                    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+                                        | sudo tee /etc/apt/sources.list.d/pgdg.list
+                                    sudo apt-get update -qq
                                     sudo apt-get install -y postgresql-14 postgresql-contrib-14
                                 fi
                                 sudo systemctl enable postgresql
