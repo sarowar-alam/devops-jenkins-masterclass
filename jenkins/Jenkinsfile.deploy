@@ -215,16 +215,20 @@ REMOTE_SCRIPT
                                 sudo -u postgres psql -d bmidb -c "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO bmi_user;" 2>/dev/null || true
 
                                 # Allow password auth for bmi_user in pg_hba.conf
-                                PG_HBA=\$(sudo -u postgres psql -tAc "SHOW hba_file")
-                                if ! grep -q "bmi_user" "\$PG_HBA"; then
+                                PG_HBA=\$(sudo -u postgres psql -tAc "SHOW hba_file" | tr -d '[:space:]')
+                                if ! sudo grep -q "bmi_user" "\$PG_HBA"; then
                                     printf "\nhost bmidb bmi_user 127.0.0.1/32 scram-sha-256\nhost bmidb bmi_user ::1/128 scram-sha-256\n" | sudo tee -a "\$PG_HBA"
                                     sudo systemctl reload postgresql
                                     echo "pg_hba.conf updated for bmi_user"
                                 fi
 
-                                # Run migrations
-                                sudo -u postgres psql -d bmidb -f ${APP_DIR}/backend/migrations/001_create_measurements.sql 2>/dev/null || true
-                                sudo -u postgres psql -d bmidb -f ${APP_DIR}/backend/migrations/002_add_measurement_date.sql 2>/dev/null || true
+                                # Run migrations — copy to /tmp first so postgres user can read them
+                                # (postgres user cannot traverse /home/ubuntu/ — Permission denied)
+                                cp ${APP_DIR}/backend/migrations/001_create_measurements.sql /tmp/
+                                cp ${APP_DIR}/backend/migrations/002_add_measurement_date.sql /tmp/
+                                sudo -u postgres psql -d bmidb -f /tmp/001_create_measurements.sql
+                                sudo -u postgres psql -d bmidb -f /tmp/002_add_measurement_date.sql
+                                rm -f /tmp/001_create_measurements.sql /tmp/002_add_measurement_date.sql
                                 echo "Migrations complete"
 REMOTE_SCRIPT
                         """
@@ -389,8 +393,8 @@ NGINXEOF
                 script {
                     sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
                         sh """
-                            echo "Waiting 5 seconds for services to stabilise..."
-                            sleep 5
+                            echo "Waiting 15 seconds for services to stabilise..."
+                            sleep 15
 
                             ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
                                 set -euo pipefail
