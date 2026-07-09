@@ -4,7 +4,7 @@
 > **Target:** AWS Ubuntu 24.04 LTS EC2 instance  
 > **Pipeline:** `jenkins/Jenkinsfile.deploy`  
 > **Strategy:** Smart idempotent deployment — detects fresh vs existing, backs up before every update  
-> **Notifications:** AWS SES SMTP email via Jenkins Email Extension Plugin
+> **Notifications:** AWS SES via EC2 IAM Role — no SMTP credentials needed
 
 ---
 
@@ -52,7 +52,7 @@ Launch an EC2 instance with these settings:
 
 ### 2 — Jenkins Credentials Setup
 
-You need three credentials in Jenkins before running the pipeline.
+You need **two** credentials in Jenkins before running the pipeline.
 
 #### Credential 1 — EC2 SSH Private Key
 
@@ -75,98 +75,62 @@ You need three credentials in Jenkins before running the pipeline.
    - **Description:** `BMI App PostgreSQL Connection String`
    - **Secret:** `postgresql://bmi_user:YourStrongPassword123!@localhost:5432/bmidb`
 
-> Choose a strong password. This exact password will be used when `setup-database.sh` creates the PostgreSQL user.
-
-#### Credential 3 — Default Notification Email
-
-1. `Manage Jenkins` → `System` → **Default Recipients** field
-   - Enter your email address here
-   - Or set per-pipeline via the `NOTIFY_EMAIL` parameter
+> Choose a strong password now and keep it consistent — the pipeline extracts this password from the URL and creates the PostgreSQL user with it on first deploy.
 
 ---
 
-## Section A — AWS SES Setup for Email Notifications
+## Section A — AWS SES Email Setup (IAM Role Approach)
 
-Jenkins uses AWS Simple Email Service (SES) as the SMTP relay for all deployment notifications. Follow these steps exactly.
+The pipeline sends HTML emails using the **AWS CLI** on the Jenkins master, authenticated via the **EC2 IAM role** — no SMTP credentials or Jenkins email plugin configuration required.
 
-### A1 — Verify Your Sender Email in SES
+### A1 — Add SES Permission to the Jenkins EC2 IAM Role
+
+1. Go to the **AWS IAM Console** → **Roles**
+2. Find the role attached to your Jenkins master EC2 (e.g. `SSM` or `jenkins-master-ec2-role`)
+3. Click **Add permissions** → **Create inline policy**
+4. Switch to the **JSON** tab and paste:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+5. Name the policy `ses-send-policy` → **Create policy**
+
+> If using Terraform (`terraform-infra/`), this policy is already defined in `modules/iam/main.tf` as `aws_iam_role_policy.ses_send` and applied automatically with `terraform apply`.
+
+### A2 — Verify Sender and Recipient Emails in SES
 
 1. Go to: [https://console.aws.amazon.com/ses/](https://console.aws.amazon.com/ses/)
-2. In the left menu: `Configuration` → `Verified identities`
-3. Click **Create identity**
-4. Select **Email address**
-5. Enter the email you want to send FROM (e.g. `jenkins@yourdomain.com` or your personal email)
-6. Click **Create identity**
-7. **Check your inbox** and click the verification link in the email from AWS
+2. Left menu → `Configuration` → **Verified identities** → **Create identity**
+3. Select **Email address**
+4. Enter your sender email (the value you'll use for `FROM_EMAIL` parameter, e.g. `sarowar@hotmail.com`)
+5. Click **Create identity** → check inbox and click the verification link
 
-> **SES Sandbox Mode:** By default, SES accounts are in sandbox mode. You can only send TO verified email addresses. To send to any email, request production access (next step).
+> **SES Sandbox Mode:** By default both the FROM and TO addresses must be verified. To send to any unverified address, request production access via `SES Console → Account dashboard → Request production access`.
 
-### A2 — Request SES Production Access (Remove Sandbox)
+### A3 — Verify the AWS CLI is Accessible to the Jenkins User
 
-If you want to send emails to non-verified addresses (required for production):
+The pipeline runs the `aws ses send-email` command as the `jenkins` system user. Confirm it works:
 
-1. SES Console → `Account dashboard`
-2. Click **"Request production access"**
-3. Fill in:
-   - **Mail type:** Transactional
-   - **Website URL:** Your project URL or GitHub repo URL
-   - **Use case description:** "Jenkins CI/CD notification emails for DevOps automation pipelines"
-   - **Additional contacts:** your email
-4. Click **Submit** — AWS reviews in 24 hours
+```bash
+# On the Jenkins master EC2
+sudo -u jenkins /usr/local/bin/aws --version
 
-> **For the classroom:** Verify both your sender AND recipient email in SES sandbox. That is sufficient to test.
-
-### A3 — Create SES SMTP Credentials
-
-SES uses special SMTP credentials derived from IAM. Do **not** use your regular AWS Access Key here.
-
-1. SES Console → `Account dashboard` → scroll to `Simple Mail Transfer Protocol (SMTP) settings`
-2. Click **"Create SMTP credentials"**
-3. An IAM user name is pre-filled (e.g. `ses-smtp-user.20260602`) — accept it or rename
-4. Click **Create user**
-5. **DOWNLOAD the credentials file** — this is the only time you can see the SMTP password
-
-The file contains:
-```
-IAM User Name: ses-smtp-user.20260602
-SMTP Username: AKIA...
-SMTP Password: BHDs...
+# If this fails with "Permission denied", fix with:
+sudo chmod -R a+rx /usr/local/aws-cli/
+sudo -u jenkins /usr/local/bin/aws --version   # verify
 ```
 
-> Store these securely. If you lose the password, you must create new SMTP credentials.
-
-**SES SMTP Endpoint details:**
-
-| Setting | Value |
-|---|---|
-| SMTP Server | `email-smtp.us-east-1.amazonaws.com` |
-| Port | `587` (STARTTLS — recommended) |
-| Encryption | STARTTLS |
-
-> Replace `us-east-1` with your actual AWS region if different.
-
-### A4 — Configure Jenkins Email Extension Plugin
-
-1. `Manage Jenkins` → `Plugins` → `Available` → Search **"Email Extension"** → Install
-2. After installation: `Manage Jenkins` → `System`
-3. Scroll to **"Extended E-mail Notification"** section:
-
-| Field | Value |
-|---|---|
-| **SMTP server** | `email-smtp.us-east-1.amazonaws.com` |
-| **SMTP Port** | `587` |
-| **Credentials** | Click `Add` → Kind: `Username with password` → Username = SES SMTP Username, Password = SES SMTP Password → ID: `ses-smtp-creds` |
-| **Use SSL** | ☐ Unchecked |
-| **Use TLS** | ✅ Checked (STARTTLS) |
-| **Default user e-mail suffix** | `@yourdomain.com` (optional) |
-| **Default Recipients** | `yourname@gmail.com` (your verified recipient) |
-| **Default Content Type** | `HTML (text/html)` |
-
-4. Click **"Test configuration by sending test e-mail"**
-   - Enter your verified email → click **Test configuration**
-   - You should receive a test email within 1–2 minutes
-
-5. Click **Save**
+> The bootstrap script in `terraform-infra/modules/ec2/templates/jenkins-master-linux.sh.tpl` already includes `chmod -R a+rx /usr/local/aws-cli/` for newly provisioned instances.
 
 ---
 
@@ -188,7 +152,7 @@ SMTP Password: BHDs...
 
 ### B3 — Add Pipeline Parameters
 
-Click **"Add Parameter"** four times:
+Click **"Add Parameter"** five times:
 
 | # | Type | Name | Default | Description |
 |---|---|---|---|---|
@@ -196,6 +160,7 @@ Click **"Add Parameter"** four times:
 | 2 | String | `EC2_USER` | `ubuntu` | `SSH user on EC2` |
 | 3 | String | `SSH_CREDENTIALS_ID` | `ec2-ssh-key` | `Jenkins Credential ID for EC2 SSH key` |
 | 4 | String | `NOTIFY_EMAIL` | *(empty)* | `Email address for deployment notifications` |
+| 5 | String | `FROM_EMAIL` | `sarowar@hotmail.com` | `SES verified sender email address` |
 
 ### B4 — Configure the Pipeline
 
@@ -288,26 +253,44 @@ systemctl enable nginx
 # PM2 process manager
 npm install -g pm2
 
-# PostgreSQL 14
-apt-get install -y postgresql-14 postgresql-contrib-14
-systemctl enable postgresql
-systemctl start postgresql
+# PostgreSQL 14 via official PGDG repository
+# (Ubuntu 24.04 default repos only ship PG16 — PGDG provides PG14)
+apt-get install -y gnupg2 wget
+install -d /usr/share/postgresql-common/pgdg
+wget -q -O /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    https://www.postgresql.org/media/keys/ACCC4CF8.asc
+echo "deb [signed-by=...] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+    | tee /etc/apt/sources.list.d/pgdg.list
+apt-get update && apt-get install -y postgresql-14 postgresql-contrib-14
+systemctl enable postgresql && systemctl start postgresql
 
 # Clone repository
-git clone https://github.com/sarowar-alam/devops-jenkins-masterclass.git /home/ubuntu/bmi-health-tracker
+git clone https://github.com/sarowar-alam/devops-jenkins-masterclass.git \
+    /home/ubuntu/bmi-health-tracker
 
-# Run database setup script (creates user, database, tables)
-bash /home/ubuntu/bmi-health-tracker/database/setup-database.sh
+# Database setup (inline — no interactive prompts)
+# Password extracted from DATABASE_URL Jenkins credential via Python
+DB_PASS=$(python3 -c "from urllib.parse import urlparse; print(urlparse('$DATABASE_URL').password)")
+sudo -u postgres psql -c "CREATE USER bmi_user WITH PASSWORD '$DB_PASS';"
+sudo -u postgres psql -c "CREATE DATABASE bmidb OWNER bmi_user;"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE bmidb TO bmi_user;"
+# pg_hba.conf updated for scram-sha-256 password auth
+
+# Run migrations (copied to /tmp — postgres user cannot read /home/ubuntu/)
+cp /home/ubuntu/bmi-health-tracker/backend/migrations/001_create_measurements.sql /tmp/
+cp /home/ubuntu/bmi-health-tracker/backend/migrations/002_add_measurement_date.sql /tmp/
+sudo -u postgres psql -d bmidb -f /tmp/001_create_measurements.sql
+sudo -u postgres psql -d bmidb -f /tmp/002_add_measurement_date.sql
 
 # Backend: install dependencies, configure, start with PM2
-cd backend && npm install --omit=dev
-# Creates .env with DATABASE_URL, PORT, NODE_ENV
+cd /home/ubuntu/bmi-health-tracker/backend && npm install --omit=dev
+# Creates .env with DATABASE_URL, PORT, NODE_ENV, FRONTEND_URL
 pm2 start ecosystem.config.js
 pm2 save
 pm2 startup  # Auto-start PM2 on system boot
 
 # Frontend: build and deploy to Nginx
-cd frontend && npm install && npm run build
+cd /home/ubuntu/bmi-health-tracker/frontend && npm install && npm run build
 cp -r dist/* /var/www/bmi-health-tracker/
 
 # Configure Nginx virtual host
@@ -316,7 +299,8 @@ cp -r dist/* /var/www/bmi-health-tracker/
 nginx -t && systemctl reload nginx
 
 # Create deployment marker
-echo "Deployed: $(date) | Build: N" > /home/ubuntu/bmi-health-tracker/.deployed
+echo "Deployed: $(date) | Build: N | Mode: FRESH" \
+    > /home/ubuntu/bmi-health-tracker/.deployed
 ```
 
 ### Update Deploy: What Gets Backed Up
@@ -345,6 +329,7 @@ Then it pulls the latest code and redeploys.
    - `EC2_USER`: `ubuntu`
    - `SSH_CREDENTIALS_ID`: `ec2-ssh-key`
    - `NOTIFY_EMAIL`: `yourname@gmail.com`
+   - `FROM_EMAIL`: `sarowar@hotmail.com` (your SES-verified sender)
 3. Click **Build**
 4. Watch Console Output — full install takes 5–10 minutes
 
@@ -423,28 +408,42 @@ curl -s http://localhost:3000/api/measurements
 
 ## Email Notification Format
 
+The pipeline sends HTML emails via `aws ses send-email` using the Jenkins EC2 IAM role. No SMTP plugin or credentials needed.
+
 ### Success Email
 
 ```
-Subject: [SUCCESS] BMI Health Tracker — Deployed | Build #42
+Subject: [SUCCESS] BMI Health Tracker Deployed - Build #42
 
-Deployment Successful
+✔ Deployment Successful — BMI Health Tracker — Build #42
 
 Job         bmi-deploy-pipeline
-Build #     42
+Build       #42
 Mode        FRESH / EXISTS
-Target      ubuntu@18.x.x.x
-App URL     http://18.x.x.x
-API URL     http://18.x.x.x/api/measurements
+Target      3.x.x.x
+App URL     http://3.x.x.x
+Console     http://jenkins:8080/job/bmi-deploy-pipeline/42/console
+```
+
+### Failure Email
+
+```
+Subject: [FAILED] BMI Health Tracker Deployment Failed - Build #42
+
+✘ Deployment Failed — BMI Health Tracker — Build #42
+
+Job         bmi-deploy-pipeline
+Build       #42
+Target      3.x.x.x
 Console     http://jenkins:8080/job/bmi-deploy-pipeline/42/console
 ```
 
 ### Email Failure Fallback (Console)
 
-If SES is misconfigured or unreachable, the pipeline **does not fail**. Instead it prints to console:
+If SES is misconfigured or the IAM role lacks `ses:SendEmail`, the pipeline **does not fail**. Instead it prints to console:
 
 ```
-[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ...
+[WARN] SES email failed — ensure IAM role has ses:SendEmail and FROM_EMAIL is verified in SES. Error: ...
 ```
 
 The deployment itself is unaffected.
@@ -460,11 +459,24 @@ The deployment itself is unaffected.
 3. Verify the key matches the key pair associated with the EC2 instance
 4. Test manually: `ssh -i key.pem ubuntu@<EC2_IP>`
 
-### "setup-database.sh: Permission denied"
+### PostgreSQL 14 not found on Ubuntu 24.04
+
+Ubuntu 24.04 (Noble) default repos only ship PostgreSQL 16. The pipeline adds the official PGDG apt repository automatically to install PG14. If you see `E: Unable to locate package postgresql-14`, verify the PGDG repo was added:
 
 ```bash
-# On EC2: make the script executable
-chmod +x /home/ubuntu/bmi-health-tracker/database/setup-database.sh
+# On EC2
+cat /etc/apt/sources.list.d/pgdg.list
+sudo apt-get update && sudo apt-get install -y postgresql-14
+```
+
+### "aws: not found" in Jenkins sh step
+
+The Jenkins `sh` step runs as the `jenkins` system user with a restricted PATH. AWS CLI v2 is at `/usr/local/bin/aws` but the `jenkins` user may not have permission to traverse `/usr/local/aws-cli/`. Fix:
+
+```bash
+# On the Jenkins master EC2
+sudo chmod -R a+rx /usr/local/aws-cli/
+sudo -u jenkins /usr/local/bin/aws --version   # verify
 ```
 
 ### "pm2: command not found" during update
@@ -497,6 +509,20 @@ sudo cat /etc/nginx/sites-available/bmi-health-tracker
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+### SES email fails — "MessageId" not returned
+
+1. Verify the sender email (`FROM_EMAIL`) is verified in SES Console → Verified identities
+2. In SES sandbox mode, the recipient (`NOTIFY_EMAIL`) must also be verified
+3. Verify the IAM role has `ses:SendEmail` permission:
+   ```bash
+   # On Jenkins master EC2
+   aws iam simulate-principal-policy \
+     --policy-source-arn "$(aws sts get-caller-identity --query Arn --output text)" \
+     --action-names "ses:SendEmail" \
+     --resource-arns "*"
+   # Look for "EvalDecision": "allowed"
+   ```
 
 ---
 
