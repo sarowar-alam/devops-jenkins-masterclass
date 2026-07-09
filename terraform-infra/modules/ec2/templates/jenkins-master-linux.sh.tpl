@@ -51,6 +51,8 @@ curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
 unzip -q /tmp/awscliv2.zip -d /tmp/
 /tmp/aws/install
 rm -rf /tmp/awscliv2.zip /tmp/aws
+# Ensure jenkins (non-login) user can traverse the AWS CLI v2 directory
+chmod -R a+rx /usr/local/aws-cli/
 
 # ── 6. UFW firewall ───────────────────────────────────────────────────────────
 ufw allow 22/tcp
