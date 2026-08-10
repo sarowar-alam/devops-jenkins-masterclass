@@ -11,7 +11,7 @@
 //   bmi-database-url   → Secret text (postgresql://bmi_user:PASS@localhost:5432/bmidb)
 //
 // Required Plugins:
-//   SSH Agent, Email Extension, Credentials Binding
+//   Credentials Binding (provides sshUserPrivateKey), Email Extension
 // ============================================================
 
 pipeline {
@@ -21,7 +21,7 @@ pipeline {
         timestamps()
         buildDiscarder(logRotator(numToKeepStr: '20'))
         timeout(time: 40, unit: 'MINUTES')
-        // ansiColor('xterm')
+        // ansiColor('xterm') // requires the AnsiColor plugin — install it, then uncomment
     }
 
     parameters {
@@ -99,10 +99,10 @@ pipeline {
         stage('Pre-flight Check') {
             steps {
                 script {
-                    sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                    withCredentials([sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                         def result = sh(
                             script: """
-                                ssh -o StrictHostKeyChecking=no \
+                                ssh -i "\$SSH_KEY" -o StrictHostKeyChecking=no \
                                     -o ConnectTimeout=30 \
                                     ${params.EC2_USER}@${params.EC2_HOST} \
                                     'test -f ${MARKER} && echo EXISTS || echo FRESH'
@@ -133,12 +133,12 @@ pipeline {
                 expression { env.DEPLOY_MODE == 'FRESH' }
             }
             steps {
-                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                withCredentials([sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                     withCredentials([
                         string(credentialsId: 'bmi-database-url', variable: 'DATABASE_URL')
                     ]) {
                         sh """
-                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
+                            ssh -i "\$SSH_KEY" -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
                                 set -euo pipefail
                                 echo "=== [FRESH INSTALL] Starting ==="
 
@@ -185,7 +185,7 @@ REMOTE_SCRIPT
                         """
 
                         sh """
-                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
+                            ssh -i "\$SSH_KEY" -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
                                 set -euo pipefail
 
                                 # Clone repository
@@ -241,7 +241,7 @@ REMOTE_SCRIPT
 
                         // Inject DATABASE_URL from Jenkins credential into the remote .env
                         sh """
-                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+                            ssh -i "\$SSH_KEY" -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
                                 set -euo pipefail
 
                                 echo "=== [FRESH INSTALL] Configuring backend ==="
@@ -328,9 +328,9 @@ NGINXEOF
                 expression { env.DEPLOY_MODE == 'EXISTS' }
             }
             steps {
-                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                withCredentials([sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+                        ssh -i "\$SSH_KEY" -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
                             set -euo pipefail
                             TIMESTAMP=\$(date +%Y%m%d-%H%M%S)
                             BACKUP_PATH=${BACKUP_DIR}/bmi-\${TIMESTAMP}
@@ -405,12 +405,12 @@ NGINXEOF
         stage('Health Check') {
             steps {
                 script {
-                    sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                    withCredentials([sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                         sh """
                             echo "Waiting 15 seconds for services to stabilise..."
                             sleep 15
 
-                            ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
+                            ssh -i "\$SSH_KEY" -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} '
                                 set -euo pipefail
                                 echo "=== Health Checks ==="
 
