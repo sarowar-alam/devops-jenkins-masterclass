@@ -4,6 +4,25 @@ A full-stack **BMI & Health Tracking** web application built as a practical proj
 
 ---
 
+## Documentation Index
+
+> **New to this repo? Start with [docs/00-master-implementation-guide.md](docs/00-master-implementation-guide.md)** — the
+> single master runbook covering both ways to stand up Jenkins (Terraform-automated *and* fully manual, for
+> both Linux and Windows master/agent nodes) and the full "what after what" order for every pipeline below.
+
+| Doc | Session | Covers |
+|---|---|---|
+| [docs/00-master-implementation-guide.md](docs/00-master-implementation-guide.md) | SL#0 | **Master guide** — infra setup (Terraform + manual), full pipeline run order |
+| [docs/01-jenkins-architecture.md](docs/01-jenkins-architecture.md) | SL#1 | Jenkins concepts, vs GitHub Actions |
+| [docs/02-jenkins-installation.md](docs/02-jenkins-installation.md) | SL#2 | Manual Jenkins Master install — Linux & Windows |
+| [docs/03-jenkins-agents.md](docs/03-jenkins-agents.md) | SL#3 | Manual Agent setup — Linux (SSH) & Windows (JNLP/NSSM) |
+| [docs/04-jenkins-pipelines.md](docs/04-jenkins-pipelines.md) | SL#4 | Verification pipelines across master/agents |
+| [docs/05-three-tier-deployment.md](docs/05-three-tier-deployment.md) | SL#5 | Bare-metal EC2 deploy (Nginx + PM2 + PostgreSQL) |
+| [docs/06-docker-deploy.md](docs/06-docker-deploy.md) | SL#6 | Docker build → ECR → Docker Compose deploy |
+| [docs/07-terraform-pipeline.md](docs/07-terraform-pipeline.md) | SL#7 | Terraform IaC pipeline for application infrastructure |
+
+---
+
 ## Table of Contents
 
 1. [Project Overview](#1-project-overview)
@@ -167,7 +186,8 @@ All instances are SSM-managed (no bastion host needed). Masters are internet-fac
 │   └── nginx-frontend.conf     # SPA routing + /api proxy config
 │
 ├── jenkins/                    # All Jenkins pipeline definitions
-│   ├── Jenkinsfile.master       # SL#4 — runs on built-in node
+│   ├── Jenkinsfile.master       # SL#4 — runs on built-in node (Linux master)
+│   ├── Jenkinsfile.masterWindows# SL#4 — runs on built-in node (Windows master)
 │   ├── Jenkinsfile.linux-agent  # SL#4 — runs on linux-agent
 │   ├── Jenkinsfile.windows-agent# SL#4 — runs on windows-agent (bat)
 │   ├── Jenkinsfile.deploy       # SL#5 — bare-metal SSH deploy
@@ -201,6 +221,7 @@ All instances are SSM-managed (no bastion host needed). Masters are internet-fac
 │   └── modules/
 │
 ├── docs/                       # Course session guides
+│   ├── 00-master-implementation-guide.md  # Start here
 │   ├── 01-jenkins-architecture.md
 │   ├── 02-jenkins-installation.md
 │   ├── 03-jenkins-agents.md
@@ -255,6 +276,8 @@ Activity multipliers: `sedentary=1.2`, `light=1.375`, `moderate=1.55`, `active=1
 
 ## 6. Jenkins Infrastructure
 
+> Full step-by-step walkthrough (Terraform-automated **and** fully manual, for both Linux and Windows): [docs/00-master-implementation-guide.md](docs/00-master-implementation-guide.md).
+
 The Jenkins infrastructure (4 EC2 instances) is provisioned by Terraform in `terraform-infra/` and bootstrapped via EC2 user data scripts.
 
 ### Instances
@@ -271,16 +294,16 @@ The Jenkins infrastructure (4 EC2 instances) is provisioned by Terraform in `ter
 ```bash
 cd terraform-infra
 
-# First time only — copy and edit variables
-cp terraform.tfvars.example terraform.tfvars
-# Edit: admin_cidr (your IP), key_pair_name
-
 terraform init
-terraform plan -var="admin_cidr=$(curl -s ifconfig.me)/32"
-terraform apply -var="admin_cidr=$(curl -s ifconfig.me)/32"
+terraform plan -var="admin_cidr=$(curl -s ifconfig.me)/32" -var="key_pair_name=<your-key-pair>"
+terraform apply -var="admin_cidr=$(curl -s ifconfig.me)/32" -var="key_pair_name=<your-key-pair>"
 ```
 
+> There is no `terraform.tfvars.example` in `terraform-infra/` — pass overrides with `-var` flags or create your own `terraform.tfvars` from [terraform-infra/variables.tf](terraform-infra/variables.tf).
+
 Wait **3–5 minutes** after `apply` for user data to complete. Outputs include Jenkins URLs, SSH/SSM commands, and password retrieval commands.
+
+> **Known gap:** the Linux master's bootstrap script does not install Docker, but `Jenkinsfile.rc` / `Jenkinsfile.deploy-docker` need it on `built-in`. Install it once manually — see [docs/00 § 2.5](docs/00-master-implementation-guide.md#25-known-gap--docker-must-be-added-to-the-linux-master-manually).
 
 ### Retrieve Initial Admin Password
 
@@ -304,16 +327,19 @@ aws ssm send-command `
 
 ## 7. CI/CD Pipeline Overview
 
-The project has **7 Jenkins pipelines** mapped to course sessions (SL = Session Lab):
+> Full run order and dependencies for every pipeline: [docs/00-master-implementation-guide.md § 5](docs/00-master-implementation-guide.md#5-full-implementation-order--what-after-what) and [§ 6](docs/00-master-implementation-guide.md#6-pipeline-by-pipeline-reference).
+
+The project has **8 Jenkins pipelines** mapped to course sessions (SL = Session Lab):
 
 ```
-SL#4  Jenkinsfile.master         Environment verification on controller node
+SL#4  Jenkinsfile.master         Environment verification on controller node (Linux master)
+SL#4  Jenkinsfile.masterWindows  Environment verification on controller node (Windows master)
 SL#4  Jenkinsfile.linux-agent    Environment verification on Linux agent
 SL#4  Jenkinsfile.windows-agent  Environment verification on Windows agent
-SL#5  Jenkinsfile.deploy         Bare-metal deploy → EC2 (Nginx + PM2 + PostgreSQL)
-SL#6  Jenkinsfile.rc             Docker build → push to Amazon ECR
-SL#6  Jenkinsfile.deploy-docker  Pull from ECR → deploy via Docker Compose
-SL#7  Jenkinsfile.terraform      Terraform plan/apply/destroy with manual approval
+SL#5  Jenkinsfile.deploy         Bare-metal deploy → EC2 (Nginx + PM2 + PostgreSQL)          → docs/05
+SL#6  Jenkinsfile.rc             Docker build → push to Amazon ECR                           → docs/06
+SL#6  Jenkinsfile.deploy-docker  Pull from ECR → deploy via Docker Compose                    → docs/06
+SL#7  Jenkinsfile.terraform      Terraform plan/apply/destroy with manual approval             → docs/07
 ```
 
 ### Pipeline Flow (SL#5 Bare Metal)
