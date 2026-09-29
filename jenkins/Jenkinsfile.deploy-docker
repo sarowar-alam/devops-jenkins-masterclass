@@ -17,7 +17,7 @@
 //   ec2-ssh-key      → SSH Username with private key (EC2 .pem)
 //
 // Required Jenkins Plugins:
-//   Copy Artifact, SSH Agent, Credentials Binding, Email Extension
+//   Credentials Binding (provides sshUserPrivateKey), Email Extension
 //
 // Prerequisite:
 //   Run bmi-rc-pipeline FIRST to build and push images to ECR.
@@ -61,7 +61,7 @@ pipeline {
         )
         string(
             name: 'AWS_REGION',
-            defaultValue: 'us-east-1',
+            defaultValue: 'ap-south-1',
             description: 'AWS region where ECR repositories reside'
         )
     }
@@ -89,40 +89,46 @@ pipeline {
         }
 
         // --------------------------------------------------------
-        // Stage 2: Fetch Build Manifest from RC Pipeline
-        // Uses Copy Artifact plugin to fetch build-manifest.json
-        // from the specific RC build number provided as parameter
+        // Stage 2: Resolve Build Info
+        // Reconstructs ECR image URIs from RC_BUILD_NUMBER directly —
+        // avoids the Copy Artifact plugin (not installed on this master)
         // --------------------------------------------------------
-        stage('Fetch Build Manifest') {
+        stage('Resolve Build Info') {
             steps {
                 script {
-                    // Copy build-manifest.json from the RC pipeline's archived artifacts
-                    copyArtifacts(
-                        projectName: 'bmi-rc-pipeline',
-                        selector: specific(params.RC_BUILD_NUMBER),
-                        filter: 'build-manifest.json',
-                        fingerprintArtifacts: true
-                    )
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
+                        def accountId = sh(
+                            script: """
+                                AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} \
+                                AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} \
+                                AWS_DEFAULT_REGION=${params.AWS_REGION} \
+                                aws sts get-caller-identity \
+                                    --query Account \
+                                    --output text
+                            """,
+                            returnStdout: true
+                        ).trim()
 
-                    // Parse the manifest to extract image URIs
-                    def manifest = readJSON file: 'build-manifest.json'
+                        env.ECR_REGISTRY     = "${accountId}.dkr.ecr.${params.AWS_REGION}.amazonaws.com"
+                        env.IMAGE_TAG        = "rc-${params.RC_BUILD_NUMBER}"
+                        env.FRONTEND_IMAGE   = "${env.ECR_REGISTRY}/bmi-frontend:${env.IMAGE_TAG}"
+                        env.BACKEND_IMAGE    = "${env.ECR_REGISTRY}/bmi-backend:${env.IMAGE_TAG}"
+                        env.GIT_COMMIT_SHA   = 'n/a'
+                        env.RC_TIMESTAMP     = 'n/a'
 
-                    env.IMAGE_TAG        = manifest.imageTag
-                    env.FRONTEND_IMAGE   = manifest.images.frontend
-                    env.BACKEND_IMAGE    = manifest.images.backend
-                    env.ECR_REGISTRY     = manifest.ecrRegistry
-                    env.GIT_COMMIT_SHA   = manifest.gitCommit
-                    env.RC_TIMESTAMP     = manifest.timestamp
-
-                    echo "============================================"
-                    echo " Manifest loaded"
-                    echo " RC Build #    : ${params.RC_BUILD_NUMBER}"
-                    echo " Image Tag     : ${env.IMAGE_TAG}"
-                    echo " Frontend      : ${env.FRONTEND_IMAGE}"
-                    echo " Backend       : ${env.BACKEND_IMAGE}"
-                    echo " Git Commit    : ${env.GIT_COMMIT_SHA}"
-                    echo " Built at      : ${env.RC_TIMESTAMP}"
-                    echo "============================================"
+                        echo "============================================"
+                        echo " Build info resolved"
+                        echo " RC Build #    : ${params.RC_BUILD_NUMBER}"
+                        echo " Image Tag     : ${env.IMAGE_TAG}"
+                        echo " Frontend      : ${env.FRONTEND_IMAGE}"
+                        echo " Backend       : ${env.BACKEND_IMAGE}"
+                        echo " ECR Registry  : ${env.ECR_REGISTRY}"
+                        echo "============================================"
+                    }
                 }
             }
         }
@@ -144,9 +150,9 @@ pipeline {
         // --------------------------------------------------------
         stage('Prepare EC2') {
             steps {
-                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                withCredentials([sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                     sh """
-                        ssh -o StrictHostKeyChecking=no \
+                        ssh -i \$SSH_KEY -o StrictHostKeyChecking=no \
                             -o ConnectTimeout=30 \
                             ${params.EC2_USER}@${params.EC2_HOST} bash -s << 'REMOTE_SCRIPT'
                             set -euo pipefail
@@ -203,7 +209,7 @@ REMOTE_SCRIPT
         // --------------------------------------------------------
         stage('Deploy to EC2') {
             steps {
-                sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                withCredentials([sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                     withCredentials([
                         usernamePassword(
                             credentialsId: 'aws-credentials',
@@ -217,7 +223,7 @@ REMOTE_SCRIPT
                     ]) {
                         // Transfer docker-compose.prod.yml to EC2
                         sh """
-                            scp -o StrictHostKeyChecking=no \
+                            scp -i \$SSH_KEY -o StrictHostKeyChecking=no \
                                 docker-compose.prod.yml \
                                 ${params.EC2_USER}@${params.EC2_HOST}:/home/ubuntu/bmi-docker/docker-compose.prod.yml
                             echo "docker-compose.prod.yml transferred to EC2"
@@ -225,15 +231,15 @@ REMOTE_SCRIPT
 
                         // Also transfer DB init SQL scripts for first run
                         sh """
-                            ssh -o StrictHostKeyChecking=no \
+                            ssh -i \$SSH_KEY -o StrictHostKeyChecking=no \
                                 ${params.EC2_USER}@${params.EC2_HOST} \
                                 'mkdir -p /home/ubuntu/bmi-docker/migrations'
 
-                            scp -o StrictHostKeyChecking=no \
+                            scp -i \$SSH_KEY -o StrictHostKeyChecking=no \
                                 backend/migrations/001_create_measurements.sql \
                                 ${params.EC2_USER}@${params.EC2_HOST}:/home/ubuntu/bmi-docker/migrations/01-create_measurements.sql
 
-                            scp -o StrictHostKeyChecking=no \
+                            scp -i \$SSH_KEY -o StrictHostKeyChecking=no \
                                 backend/migrations/002_add_measurement_date.sql \
                                 ${params.EC2_USER}@${params.EC2_HOST}:/home/ubuntu/bmi-docker/migrations/02-add_measurement_date.sql
 
@@ -241,7 +247,7 @@ REMOTE_SCRIPT
                         """
 
                         sh """
-                            ssh -o StrictHostKeyChecking=no \
+                            ssh -i \$SSH_KEY -o StrictHostKeyChecking=no \
                                 ${params.EC2_USER}@${params.EC2_HOST} bash -s << REMOTE_SCRIPT
                             set -euo pipefail
                             APP_DIR=/home/ubuntu/bmi-docker
@@ -303,12 +309,12 @@ REMOTE_SCRIPT
         stage('Health Check') {
             steps {
                 script {
-                    sshagent(credentials: [params.SSH_CREDENTIALS_ID]) {
+                    withCredentials([sshUserPrivateKey(credentialsId: params.SSH_CREDENTIALS_ID, keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                         sh """
                             echo "Waiting 15 seconds for containers to fully start..."
                             sleep 15
 
-                            ssh -o StrictHostKeyChecking=no \
+                            ssh -i \$SSH_KEY -o StrictHostKeyChecking=no \
                                 ${params.EC2_USER}@${params.EC2_HOST} '
                                 set -euo pipefail
                                 echo "=== Docker Compose Health Check ==="
