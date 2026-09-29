@@ -128,6 +128,23 @@ pipeline {
         }
 
         // --------------------------------------------------------
+        // Stage 3.5: Generate Lockfiles
+        // frontend/ and backend/ have no committed package-lock.json,
+        // but the Dockerfiles use 'npm ci' which requires one — generate
+        // it here (same Node image as the build) before docker build runs.
+        // --------------------------------------------------------
+        stage('Generate Lockfiles') {
+            steps {
+                sh """
+                    echo "Generating package-lock.json for frontend and backend..."
+                    docker run --rm -v "\$(pwd)/frontend:/app" -w /app node:20-alpine npm install --package-lock-only
+                    docker run --rm -v "\$(pwd)/backend:/app"  -w /app node:20-alpine npm install --package-lock-only
+                    echo "Lockfiles ready"
+                """
+            }
+        }
+
+        // --------------------------------------------------------
         // Stage 4: Build Frontend Image
         // Multi-stage build: node:20-alpine (vite build) → nginx:alpine
         // --------------------------------------------------------
