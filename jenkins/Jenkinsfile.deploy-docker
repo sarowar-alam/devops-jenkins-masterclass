@@ -334,12 +334,13 @@ REMOTE_SCRIPT
                                 fi
 
                                 echo ""
-                                echo "--- Backend API Health Check (port 3000) ---"
-                                API_CODE=\$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 3 http://localhost:3000/api/measurements)
-                                if [ "\$API_CODE" = "200" ]; then
-                                    echo "[OK] Backend API responding — HTTP \$API_CODE"
+                                echo "--- Backend API Health Check ---"
+                                # Port 3000 is not published to the host (internal-only by design) — check the containers Docker healthcheck status instead
+                                BACKEND_STATUS=\$(docker inspect --format='{{.State.Health.Status}}' bmi-backend)
+                                if [ "\$BACKEND_STATUS" = "healthy" ]; then
+                                    echo "[OK] Backend container healthy"
                                 else
-                                    echo "[FAIL] Backend API returned HTTP \$API_CODE"
+                                    echo "[FAIL] Backend container status: \$BACKEND_STATUS"
                                     docker compose -f /home/ubuntu/bmi-docker/docker-compose.prod.yml logs backend --tail 20
                                     exit 1
                                 fi
@@ -368,6 +369,8 @@ REMOTE_SCRIPT
                 echo " To rollback: re-run this pipeline with an older RC_BUILD_NUMBER"
                 echo "============================================================"
 
+                // Email notifications disabled — SMTP not configured (see Manage Jenkins > Extended E-mail Notification)
+                /*
                 try {
                     emailext(
                         from: 'Jenkins CI <sarowar.alam@gmail.com>',
@@ -405,6 +408,7 @@ REMOTE_SCRIPT
                 } catch (emailEx) {
                     echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
                 }
+                */
             }
         }
 
@@ -412,6 +416,8 @@ REMOTE_SCRIPT
             script {
                 echo "[FAILURE] Docker deployment failed — RC #${params.RC_BUILD_NUMBER} — review console output"
 
+                // Email notifications disabled — SMTP not configured (see Manage Jenkins > Extended E-mail Notification)
+                /*
                 try {
                     emailext(
                         from: 'Jenkins CI <sarowar.alam@gmail.com>',
@@ -442,6 +448,7 @@ REMOTE_SCRIPT
                 } catch (emailEx) {
                     echo "[WARN] Email notification failed — check SES SMTP config in Manage Jenkins > System > Extended E-mail Notification. Error: ${emailEx.message}"
                 }
+                */
             }
         }
 
