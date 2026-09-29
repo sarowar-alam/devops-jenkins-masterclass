@@ -29,7 +29,7 @@ pipeline {
     }
 
     environment {
-        AWS_REGION     = 'us-east-1'
+        AWS_REGION     = 'ap-south-1'
         FRONTEND_REPO  = 'bmi-frontend'
         BACKEND_REPO   = 'bmi-backend'
         IMAGE_TAG      = "rc-${BUILD_NUMBER}"
